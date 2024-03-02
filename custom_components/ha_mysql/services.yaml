@@ -1,0 +1,11 @@
+execute:
+  description: Execute MySQL query
+  fields:
+    entity_id:
+      description: ID of entity belonging to this query
+      example: ha_mysql.query1
+      required: true
+    query:
+      description: MySQL query
+      example: "SELECT * FROM your_table;"
+      required: false
