@@ -9,13 +9,13 @@ def setup(hass, config):
     config_key = config[DOMAIN]
 
     # Store the domain configuration at an easy to retrieve address
-    hass.data[DOMAIN] = {'platform': config_key}
+    hass.data[DOMAIN] = {"platform": config_key}
 
     # Store the entity configuration at an easy to retrieve address
-    for sensor in config['sensor']:
-        platform = sensor['platform']
-        name = sensor['name']
-        if (platform == DOMAIN):
+    for sensor in config["sensor"]:
+        platform = sensor["platform"]
+        if platform == DOMAIN:
+            name = sensor["name"]
             key = DOMAIN + "." + name
             hass.data[DOMAIN][key] = sensor
 
