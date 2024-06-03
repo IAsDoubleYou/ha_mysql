@@ -3,9 +3,20 @@ execute:
   fields:
     entity_id:
       description: ID of entity belonging to this query
-      example: ha_mysql.query1
+      example: sensor.query1
       required: true
     query:
       description: MySQL query
-      example: "SELECT * FROM your_table;"
+      example: "SELECT * FROM your_table"
       required: false
+goto:
+  description: Select a specific rownumber
+  fields:
+    entity_id:
+      description: ID of entity belonging to this query
+      example: sensor.query1
+      required: true
+    rownumber:
+      description: Number of the row to be selected
+      example: "5"
+      required: true
