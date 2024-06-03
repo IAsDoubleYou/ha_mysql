@@ -1,5 +1,6 @@
 from __future__ import annotations  # noqa: D100
 
+import decimal
 import json
 import logging
 import re
@@ -44,19 +45,20 @@ def setup_platform(  # noqa: D103
 #    add_entities([HAMySQLSensor(hass, config, name, mysql_db, default_query)])
 
 
+class DecimalEncoder(json.JSONEncoder):  # noqa: D101
+    def default(self, o):  # noqa: D102
+        if isinstance(o, decimal.Decimal):
+            return str(o)
+        return super().default(o)
+
+
 class HAMySQLSensor(SensorEntity):
     """Representation of a Sensor."""
 
     _attr_name = "HA MySQL Sensor"
     _attr_native_value = 0
-    _active_query = None
-    _result_item = {}
-    _json_result = ""
-
     _custom_attributes = {}
-
-    _unique_id = None
-
+    #    _unique_id = None
     _mysql_db = None
     _default_query = None
     _hass = None
@@ -81,32 +83,31 @@ class HAMySQLSensor(SensorEntity):
 
         return clean_string
 
-    def __init__(self, hass, config, name, mysql_db, default_query):  # noqa: D107
+    def __init__(self, hass, config, name, mysql_db, default_query) -> None:  # noqa: D107
         self._attr_name = name
 
         # _unique_id = uuid.uuid4()
         # _unique_id = str(_unique_id).replace("-", "")
         # self._unique_id = f"ha_mysql_{_unique_id}"
 
-        self._unique_id = self.string_to_id("ha_mysql." + name)
+        #        self._unique_id = self.string_to_id("ha_mysql." + name)
+
+        self._hass = hass
 
         self._mysql_db = mysql_db
         self._default_query = default_query
-        self._active_query = default_query
-        self._active_record = -1
-        self._hass = hass
+        self._active_row = -1
+        self._available_rows = 0
+        self._active_query = ""
+        self._result_item = {}
+        self._json_result = ""
+        self._cursor_description = {}
+        self._rows = {}
 
-        self._custom_attributes = {
-            "Name": name,
-            "Database": mysql_db,
-            "Query": self._active_query,
-            "UniqueId": self._unique_id,
-            "ActiveRecord": self._active_record,
-            "QueryResult": self._result_item,
-            "JSONResult": self._json_result,
-        }
+        self.update()
 
         self._hass.services.register(DOMAIN, "execute", self.execute_service)
+        self._hass.services.register(DOMAIN, "goto", self.goto_service)
 
     @property
     def extra_state_attributes(self):
@@ -114,9 +115,14 @@ class HAMySQLSensor(SensorEntity):
         return self._custom_attributes
 
     @property
-    def unique_id(self):
+    def state_attributes(self):
         """Return the state attributes of the sensor."""
-        return self._unique_id
+        return self._custom_attributes
+
+    #    @property
+    #    def unique_id(self):
+    #        """Return the state attributes of the sensor."""
+    #        return self._unique_id
 
     @property
     def mysql_db(self):
@@ -129,17 +135,45 @@ class HAMySQLSensor(SensorEntity):
         return self._default_query
 
     def update(self):  # noqa: D102
+        _LOGGER.debug("Updating state and attributes")
+        self._state = self._available_rows
         self._custom_attributes = {
-            "Name": self.name,
-            "Database": self._mysql_db,
-            "Query": self._active_query,
-            "UniqueId": self._unique_id,
-            "ActiveRecord": self._active_record,
-            "QueryResult": self._result_item,
-            "JSONResult": self._json_result,
+            "name": self.name,
+            #            "entity_id": self._unique_id,
+            "database": self.mysql_db,
+            "default_query": self._default_query,
+            "active_query": self._active_query,
+            "available_rows": self._available_rows,
+            "selected_row_number": self._active_row,
+            "selected_row_values": self._result_item,
+            "json_result": self._json_result,
         }
+        _LOGGER.debug("Updated state and attributes")
 
-    def execute_service(self, call):  # noqa: D102
+    def select_row(self, entity_to_modify, rownumber):  # noqa: D102
+        _LOGGER.debug("Selecting requested row")
+
+        # Retrieve the field values of the requested row, so these can be returned as attributes
+        _fieldvalues = entity_to_modify._rows[rownumber]
+
+        # Retrieve the column description objects and construct the result structure
+        # consisting of column name and field values
+        _result_item = {}
+
+        for _colcounter, columnnobject in enumerate(
+            entity_to_modify._cursor_description
+        ):
+            _result_item[columnnobject[0]] = str(_fieldvalues[_colcounter])
+
+        entity_to_modify._result_item = _result_item
+        entity_to_modify._active_row = rownumber
+        self.update()
+        self.async_schedule_update_ha_state()
+        _LOGGER.debug("Selected requested row")
+
+    def goto_service(self, call):
+        _LOGGER.debug("Executing goto_service")
+
         entityid_to_modify = call.data.get("entity_id")
 
         # Zoek de juiste entiteit op basis van de unieke identifier
@@ -150,9 +184,27 @@ class HAMySQLSensor(SensorEntity):
                 break
 
         if entity_to_modify:
-            #            current_state = self._hass.states.get(entityid_to_modify)
-            #            new_attributes = dict(current_state.attributes)
+            rownumber = call.data.get("rownumber")
+            self.select_row(entity_to_modify, rownumber)
+            _LOGGER.debug("Executed goto_service")
+        else:
+            _LOGGER.error(
+                "Error executing service. The provided entity does not exists"
+            )
 
+    def execute_service(self, call):  # noqa: D102
+        _LOGGER.debug("Executing execute_service")
+
+        entityid_to_modify = call.data.get("entity_id")
+
+        # Zoek de juiste entiteit op basis van de unieke identifier
+        entity_to_modify = None
+        for entity in entities:
+            if entity.entity_id == entityid_to_modify:
+                entity_to_modify = entity
+                break
+
+        if entity_to_modify:
             # Ophalen van de configuratie
 
             _platform_config = self.hass.data.get(DOMAIN).get("platform")
@@ -191,27 +243,36 @@ class HAMySQLSensor(SensorEntity):
                         # Retrieve all rows and convert to list of dictionaries
                         _columns = [col[0] for col in cursor.description]
                         _rows = cursor.fetchall()
-                        _result = [dict(zip(_columns, _row)) for _row in _rows]
+                        result = [dict(zip(_columns, _row)) for _row in _rows]
 
                         # Convert to JSON string
-                        #                        json_result = json.dumps(result, ensure_ascii=False, indent=4)
-                        _json_result = json.dumps(_result, ensure_ascii=False, indent=2)
+                        _json_result = json.dumps(
+                            result,
+                            ensure_ascii=False,
+                            indent=4,
+                            default=str,
+                            cls=DecimalEncoder,
+                        )
 
                         # Retrieve the field values of the requested row, so these can be returned as attributes
                         _fieldvalues = _rows[0]
-
-                        #                        fieldvalues = cursor.fetchone()
 
                         # Retrieve the column description objects and construct the result structure
                         # consisting of column name and field values
                         _result_item = {}
 
                         for _colcounter, columnnobject in enumerate(cursor.description):
-                            _result_item[columnnobject[0]] = _fieldvalues[_colcounter]
+                            _result_item[columnnobject[0]] = str(
+                                _fieldvalues[_colcounter]
+                            )
 
+                        entity_to_modify._rows = _rows
+                        entity_to_modify._cursor_description = cursor.description
                         entity_to_modify._json_result = _json_result
                         entity_to_modify._result_item = _result_item
-                        entity_to_modify._active_record = 0
+                        entity_to_modify._active_row = 0
+                        entity_to_modify._available_rows = cursor.rowcount
+                        _LOGGER.debug("Executed execute_service")
             except Exception as e:
                 _LOGGER.error("Error executing query: %s", str(e))
                 entity_to_modify._attr_native_value = -1

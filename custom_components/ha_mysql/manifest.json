@@ -1,15 +1,17 @@
 {
     "domain": "ha_mysql",
     "name": "HA MySQL Sensor",
+    "codeowners": [
+        "@IAsDoubleYou"
+    ],
     "documentation": "https://your.documentation.link",
     "dependencies": [],
-    "codeowners": [],
-    "requirements": [],
     "config_flow": false,
     "translations": [],
     "mqtt": false,
-    "version": "1.0.0",
     "issue_tracker": "https://github.com/your/github/repo/issues",
     "pypi": "https://pypi.org/project/your-package/",
-    "panel": false
+    "panel": false,
+    "requirements": [],
+    "version": "1.0.0"
 }
