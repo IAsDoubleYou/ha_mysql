@@ -1,0 +1,10 @@
+execute:
+  description: "Voer een specifieke SQL query uit op de MySQL database."
+  fields:
+    entity_id:
+      description: ID of entity belonging to this query
+      example: sensor.query1
+      required: true
+    query:
+      description: "De SQL query die uitgevoerd moet worden."
+      example: "SELECT * FROM my_table"
