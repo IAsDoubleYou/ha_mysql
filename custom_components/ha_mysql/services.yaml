@@ -1,22 +1,21 @@
-execute:
-  description: Execute MySQL query
+set_query:
+  description: "Replace the active query with another."
   fields:
     entity_id:
-      description: ID of entity belonging to this query
+      description: Entity id of the sensor for which the query should be replaced
       example: sensor.query1
       required: true
     query:
-      description: MySQL query
-      example: "SELECT * FROM your_table"
-      required: false
-goto:
-  description: Select a specific rownumber
+      description: "The new query that should be applied"
+      example: "SELECT 'Hello Friends' FROM DUAL"
+select_record:
+  description: "This service should be used to activate a specific record from the query's resultset"
   fields:
     entity_id:
-      description: ID of entity belonging to this query
+      description: Entity id of the sensor that owns the resultset
       example: sensor.query1
       required: true
     rownumber:
-      description: Number of the row to be selected
-      example: "5"
+      description: "The number of the row that should be selected"
+      example: 2
       required: true
