@@ -1,9 +1,7 @@
 {
     "domain": "ha_mysql",
     "name": "HA MySQL Sensor",
-    "codeowners": [
-        "@IAsDoubleYou"
-    ],
+    "codeowners": ["@IAsDoubleYou"],
     "documentation": "https://github.com/IAsDoubleYou/ha_mysql/",
     "iot_class": "local_polling",
     "dependencies": [],
