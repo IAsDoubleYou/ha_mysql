@@ -18,8 +18,8 @@
 # ha_mysql
 Custom component that provides a HA sensor to retrieve the result of a specified MySQL Query
 
-The component creates sensors for each default query that is defined in the configuration.yaml.
-The query can be overruled at run time when executing the **ha_mysql.execute** function
+The component creates a sensor for each (initial) query that is defined in the configuration.yaml.
+The query can be overriden at run time when executing the **ha_mysql.set_query** function
 
 The query should be written in the form:
 ```text
@@ -54,120 +54,71 @@ This component can be installed using HACS. Please follow directions [here](http
 The MySQL database configuration should be added as follow in configuration.yaml:
 ```text
 ha_mysql:
-  mysql_host: <mysqldb host ip address>
-  mysql_port: <mysql port>
-  mysql_username: <mysqldb username>
-  mysql_password: <mysqldb password>
+  host: <mysqldb host ip address>
+  port: <mysql port>
+  username: <mysqldb username>
+  password: <mysqldb password>
+  database: <mysqldb database>
 
 sensor:
 - platform: ha_mysql
   name: <desired query name>
-  friendly_name: <friendly name for the query>
-  mysql_db: <mysqldb databasename>
-  default_query: <default query>
+  query: <initial query>
 ```
 The port number (mysql_port) is optional and defaults to 3306
+The database option will (also?) be placed on the query level. 
 
 <b>Examples:</b><br>
 ```text
 - platform: ha_mysql
-  name: Query Employees
-  friendly_name: "Employees"
-  mysql_db: testdb
-  default_query: SELECT * FROM emp
+  query: SELECT * FROM emp
 - platform: ha_mysql
-  name: Query Departments
-  friendly_name: "Departments"
-  mysql_db: testdb
-  default_query: SELECT * FROM dept
+  query: SELECT * FROM dept
 
 ## Services
-1. ha_mysql.execute (ready)
-2. ha_mysql.next (TBD)
-3. ha_mysql.previous (TBD)
-4. ha_mysql.first (TBD)
-5. ha_mysql.last (TBD)
-6. ha_mysql.goto (TBD)
+1. ha_mysql.set_query (entity_id, query)
+2. ha_mysql.select_record (entity_id, rownumber)
    
 ## Usage
-### ha_mysql.execute
-The service should be called by passing the entity_id of the sensor and optionally a query parameter which wil replace the default_query of the sensor.
-Being able to replacing the default query can be useful to build dynamic quries that depends on information that only becomes available at runtime.
+### ha_mysql.set_query
+The service should be called by passing the entity_id of the sensor and a query parameter which wil replace the initial query of the sensor.
+Being able to replace the initial query can be useful to build dynamic quries that depends on information that only becomes available at runtime.
 
 ### Request
 <b>Examples:</b><br>
 ```text
 
-**HIER VERDER**
-
-service: mysql_query.query
+service: ha_mysql.set_query
 data:
-  query: select * from contact where phonenumber='1234567890'
-  db4query: privatedb
-
-service: mysql_query.query
-data:
-  query: select * from contact where phonenumber like '0%'
-
-service: mysql_query.query
-data:
-  query: |
-    with cte_query as (select 'Hello World' from dual)
-    select * from cte_query
+  entity_id: sensor.department
+  query: SELECT 'Hello Friends' FROM DUAL
 ```
 
-### Response
-If the query achieves a result, this will be returned as a collection.
-<b>Example response in YAML format:</b><br>
+### ha_mysql.select_record
+The service should be called by passing the entity_id of the sensor and a rownumber parameter. The rownumber specifies the number of the row of the resultset to activate. This will cause the fields of the selected record to become available as attributes with names that corresponds to the names of the selected colums, prefixed by the string 'value_of'. This prefix is used to avoid collision with other static attributes like query_date, query_time, friendly_name etc.
+For example: if the selection list of the query contains a field name 'friendly_name', this will become available as a dynamic attribute with the name 'valueof_friendlyname'.
+Be aware that the first row is rownumber 0 and the last row is value of the state - 1.
+In the example below the *second* row (rownumber: 1) will be selected.
+
 ```text
-result:
-  - phonenumber: "0111111111"
-    announcement: Announcement for phonenumber 0111111111
-    language: en
-  - phonenumber: "0222222222"
-    announcement: Announcement for phonenumber 0222222222
-    language: en
+service: ha_mysql.select_record
+data:
+  entity_id: sensor.emp
+  rownumber: 1
 ```
 
-### Usage from automation
-<b>An example of how to use this service and it's response from within an automation:</b><br>
-```text
-alias: mysql_query test
-description: ""
-trigger: []
-condition: []
-action:
-  - variables:
-      response: null
-  - service: mysql_query.query
-    data:
-      query: select * from contact
-    response_variable: response
-  - service: notify.your_gmail_com
-    data:
-      message: |-
-        Response from MySQL Query Service:
-
-        {%for item in response.result %}
-            {{ item.phonenumber }}<br>
-            {{ item.announcement }}<br>
-            {{ item.language }}<br><br>
-        {% endfor %}
-      title: Test of MySQL Query Service
-      target: youraccount@gmail.com
-mode: single
-```
-## Multiple databases
+## Multiple databases (STILL NEEDS TO BE IMPLEMENTED)
 The database configured with the mysql_db configuration parameter in configuration.yaml acts as the default database for each query.
 However,the default database can be overridden for each query by providing <b>db4query</b> alongside the query parameter.
 
 Example:
 ```text
-service: mysql_query.query
+service: ha_mysql.set_query
 data:
-  query: select "hello world" from dual
-  db4query: contact
+  entity_id: sensor.department
+  query: select "hello world" FROM DUAL
+  database: personnel
 ```
-The query from this example will be executed against the contact database, although the default database specified by the mysql_db configuration parameter may be a complete different database.
+The query from this example will be executed against the personnel database, although the default database specified by the database configuration parameter may be a complete different database.
 
 
