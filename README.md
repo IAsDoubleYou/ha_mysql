@@ -6,7 +6,7 @@
 [hacs_shield]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge
 [hacs]: https://github.com/hacs/integration
 
-[latest_release]: https://github.com/IAsDoubleYou/ha_mysql/releases/v1.0.0
+[latest_release]: https://github.com/IAsDoubleYou/ha_mysql/releases/latest
 [releases_shield]: https://img.shields.io/github/release/IAsDoubleYou/ha_mysql.svg?style=for-the-badge
 
 [releases]: https://github.com/IAsDoubleYou/ha_mysql/releases/
