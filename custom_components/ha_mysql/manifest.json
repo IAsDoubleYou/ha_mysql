@@ -3,9 +3,8 @@
     "name": "HA MySQL Sensor",
     "codeowners": ["@IAsDoubleYou"],
     "documentation": "https://github.com/IAsDoubleYou/ha_mysql/",
+    "integration_type": "hub",
     "iot_class": "local_polling",
-    "dependencies": [],
-    "config_flow": false,
     "issue_tracker": "https://github.com/IAsDoubleYou/ha_mysql/issues",
     "requirements": ["mysql-connector-python==8.0.28"],
     "version": "1.0.0"
