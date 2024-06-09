@@ -1,48 +1,122 @@
 from __future__ import annotations  # noqa: D100
 
+from datetime import datetime
 import decimal
 import json
 import logging
-import re
 
 import mysql.connector
+import voluptuous as vol
 
-from homeassistant.components.sensor import SensorEntity
+# from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.entity import Entity
 
 _LOGGER = logging.getLogger(__name__)
 
+CONF_SENSORS = "sensors"
+
 DOMAIN = "ha_mysql"
-CONF_MYSQL_NAME = "name"
-CONF_MYSQL_HOST = "mysql_host"
-CONF_MYSQL_PORT = "mysql_port"
-CONF_MYSQL_DB = "mysql_db"
-CONF_MYSQL_USERNAME = "mysql_username"
-CONF_MYSQL_PASSWORD = "mysql_password"
-CONF_DEFAULT_QUERY = "default_query"
+CONF_NAME = "name"
+CONF_MYSQL_HOST = "host"
+CONF_MYSQL_PORT = "port"
+CONF_MYSQL_USERNAME = "username"
+CONF_MYSQL_PASSWORD = "password"
+CONF_MYSQL_DATABASE = "database"
 CONF_QUERY = "query"
+CONF_ROWNUMBER = "rownumber"
+SERVICE_SET_QUERY = "set_query"
+SERVICE_SELECT_RECORD = "select_record"
+
+
+# Definieer de schema's
+SENSOR_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_NAME): cv.string,
+        vol.Required(CONF_QUERY): cv.string,
+    }
+)
+
+# PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+#     {
+#         vol.Required(CONF_HOST): cv.string,
+#         vol.Required(CONF_USERNAME): cv.string,
+#         vol.Required(CONF_PASSWORD): cv.string,
+#         vol.Required(CONF_DATABASE): cv.string,
+#         vol.Required(CONF_SENSORS): vol.All(cv.ensure_list, [SENSOR_SCHEMA]),
+#     }
+# )
 
 entities = []
 
 
-def setup_platform(  # noqa: D103
-    hass: HomeAssistant,
-    config: ConfigType,
-    add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
-) -> None:
-    name = config[CONF_MYSQL_NAME]
-    mysql_db = config[CONF_MYSQL_DB]
-    default_query = config[CONF_DEFAULT_QUERY]
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Get the platform configuration and create the sensors."""
+    component_config = hass.data[DOMAIN]
+    host = component_config.get(CONF_MYSQL_HOST)
+    port = component_config.get(CONF_MYSQL_PORT)
+    username = component_config.get(CONF_MYSQL_USERNAME)
+    password = component_config.get(CONF_MYSQL_PASSWORD)
+    database = component_config.get(CONF_MYSQL_DATABASE)
 
-    my_entity = HAMySQLSensor(hass, config, name, mysql_db, default_query)
-    entities.append(my_entity)
-    add_entities([my_entity])
+    name = config[CONF_NAME]
+    query = config[CONF_QUERY]
+
+    db = mysql.connector.connect(
+        host=host, port=port, user=username, password=password, database=database
+    )
+
+    entity = HAMySQLSensor(hass, config, name, query, db)
+    entities.append(entity)
+    add_entities([entity], True)
+
+    hass.services.register(DOMAIN, SERVICE_SET_QUERY, handle_set_query_service)
+    hass.services.register(DOMAIN, SERVICE_SELECT_RECORD, handle_select_record)
 
 
-#    add_entities([HAMySQLSensor(hass, config, name, mysql_db, default_query)])
+def handle_set_query_service(call):  # noqa: D103
+    _LOGGER.debug("Executing set_query service")
+
+    entityid_to_modify = call.data.get("entity_id")
+
+    # Locate the entity that needs to be addressed
+    entity_to_modify = None
+    for entity in entities:
+        if entity.entity_id == entityid_to_modify:
+            entity_to_modify = entity
+            break
+
+    query = None
+    query = call.data.get(CONF_QUERY)
+    if query is None or query == "":
+        query = entity_to_modify.default_query
+    else:
+        entity_to_modify.query = query
+
+    entity_to_modify.selected_row = 0
+
+
+def handle_select_record(call):  # noqa: D103
+    _LOGGER.debug("Executing select_record service")
+
+    entityid_to_modify = call.data.get("entity_id")
+
+    # Zoek de juiste entiteit op basis van de unieke identifier
+    entity_to_modify = None
+    for entity in entities:
+        if entity.entity_id == entityid_to_modify:
+            entity_to_modify = entity
+            break
+
+    rownumber = call.data.get(CONF_ROWNUMBER)
+    if rownumber is not None:
+        entity_to_modify.selected_row = rownumber
+
+
+def generate_unique_id(name):
+    """Generate a unique ID for the sensor."""
+    return f"{DOMAIN}_{name.lower().replace(' ', '_')}"
 
 
 class DecimalEncoder(json.JSONEncoder):  # noqa: D101
@@ -52,287 +126,118 @@ class DecimalEncoder(json.JSONEncoder):  # noqa: D101
         return super().default(o)
 
 
-class HAMySQLSensor(SensorEntity):
-    """Representation of a Sensor."""
+# Custom sensor klasse
+class HAMySQLSensor(Entity):
+    """HAMySQLSensor clas."""
 
-    _attr_name = "HA MySQL Sensor"
-    _attr_native_value = 0
-    _custom_attributes = {}
-    _unique_id = None
-    _mysql_db = None
-    _default_query = None
-    _hass = None
+    def __init__(self, hass: HomeAssistant, config, name, query, db) -> None:  # noqa: D107
+        self._name = name
+        self._query = query
+        self._db = db
+        self._unique_id = generate_unique_id(name)
+        self._hass = hass
+        self._state = None
+        self._selected_row = 0
 
-    def string_to_id(self, input_string):  # noqa: D102
-        # Zet de string eerst om naar kleine letters
-        input_string = input_string.lower()
+        self._query_date = None
+        self._query_time = None
 
-        # Vervang alle niet-toegestane tekens door underscores
-        clean_string = re.sub(r"[^a-z0-9_]", "_", input_string)
+        self._attributes = {}
 
-        # Verwijder eventuele opeenvolgende underscores
-        clean_string = re.sub(r"__+", "_", clean_string)
+    @property
+    def __str__(self):  # noqa: D105
+        return str(getattr(self, self._name))
 
-        # Zorg ervoor dat de string niet begint met een underscore
-        if clean_string.startswith("_"):
-            clean_string = clean_string[1:]
+    @property
+    def name(self):  # noqa: D102
+        return self._name
 
-        # Zorg ervoor dat de string niet eindigt met een underscore
-        if clean_string.endswith("_"):
-            clean_string = clean_string[:-1]
+    @property
+    def state(self):  # noqa: D102
+        return self._state
 
-        return clean_string
+    @property
+    def unique_id(self):
+        """Return a unique ID."""
+        return self._unique_id
 
-    def rename_keys(self, old_dict, prefix):  # noqa: D102
-        new_dict = {}
-        for key, value in old_dict.items():
-            new_key = prefix + key
-            new_dict[new_key] = value
-        return new_dict
+    @property
+    def extra_state_attributes(self):  # noqa: D102
+        return self._attributes
+
+    @property
+    def query(self):  # noqa: D102
+        return self._query
+
+    @query.setter
+    def query(self, value):  # noqa: D102
+        self._query = value
+
+    @property
+    def selected_row(self):  # noqa: D102
+        return self._selected_row
+
+    @selected_row.setter
+    def selected_row(self, value):  # noqa: D102
+        self._selected_row = value
 
     def convert_decimals(self, data):
         """Convert decimals in data structure to strings."""
         for key, value in data.items():
             if isinstance(value, decimal.Decimal):
                 data[key] = str(value)
-        return data
 
-    def __init__(self, hass, config, name, mysql_db, default_query) -> None:  # noqa: D107
-        self._attr_name = name
+    def rename_keys(self, old_dict, prefix):  # noqa: D102
+        """Rename the fields of a dict."""
+        new_dict = {}
+        for key, value in old_dict.items():
+            new_key = prefix + key
+            new_dict[new_key] = value
+        return new_dict
 
-        # _unique_id = uuid.uuid4()
-        # _unique_id = str(_unique_id).replace("-", "")
-        # self._unique_id = f"ha_mysql_{_unique_id}"
+    def execute_query(self):  # noqa: D102
+        current_time = datetime.now()
+        self._query_date = current_time.strftime("%Y-%m-%d")
+        self._query_time = current_time.strftime("%H:%M:%S")
 
-        self._unique_id = self.string_to_id("ha_mysql." + name)
+        cursor = self._db.cursor(buffered=True, dictionary=True)
 
-        self._hass = hass
+        cursor.execute(self._query)
+        result = cursor.fetchall()
 
-        self._mysql_db = mysql_db
-        self._default_query = default_query
-        self._active_row = -1
-        self._available_rows = 0
-        self._active_query = ""
-        self._json_result = ""
-        self._cursor_description = {}
-        self._rows = {}
+        for record in result:
+            self.convert_decimals(record)
 
-        # self.update()
+        cursor.close()
+        return result
 
-        self._hass.services.register(DOMAIN, "execute", self.execute_service)
-        self._hass.services.register(DOMAIN, "goto", self.goto_service)
+    def update(self):  # noqa: D102
+        result = self.execute_query()
+        if result:
+            self._attributes = {}
 
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes of the sensor."""
-        return self._custom_attributes
+            self._attributes.update(result[0])
+            self._attributes = self.rename_keys(self._attributes, "valueof_")
 
-    @property
-    def state_attributes(self):
-        """Return the state attributes of the sensor."""
-        return self._custom_attributes
+            self._attributes["selected_row"] = self._selected_row
 
-    @property
-    def unique_id(self):
-        """Return the state attributes of the sensor."""
-        return self._unique_id
-
-    @property
-    def mysql_db(self):
-        """Return the state attributes of the sensor."""
-        return self._mysql_db
-
-    @property
-    def default_query(self):
-        """Return the state attributes of the sensor."""
-        return self._default_query
-
-    def XXupdate(self):  # noqa: D102
-        _LOGGER.debug("Updating state and attributes")
-        self._state = self._available_rows
-        self._custom_attributes = {
-            "name": self.name,
-            #            "entity_id": self._unique_id,
-            "database": self.mysql_db,
-            "default_query": self._default_query,
-            "active_query": self._active_query,
-            "available_rows": self._available_rows,
-            "selected_row_number": self._active_row,
-            "json_result": self._json_result,
-        }
-        _LOGGER.debug("Updated state and attributes")
-
-    def select_row(self, entity_to_modify, rownumber):  # noqa: D102
-        _LOGGER.debug("Selecting requested row")
-
-        # Retrieve the field values of the requested row, so these can be returned as attributes
-        #        self._custom_attributes.update(entity_to_modify._rows[rownumber])
-        entity_to_modify._active_row = rownumber
-        # self.update()
-
-        self._custom_attributes.clear()
-        entity_to_modify._attr_native_value = entity_to_modify._available_rows
-        if entity_to_modify._available_rows > 0 and isinstance(
-            entity_to_modify._rows[rownumber], dict
-        ):
-            self._custom_attributes.update(
-                self.convert_decimals(entity_to_modify._rows[rownumber])
-            )
-            self._custom_attributes = self.rename_keys(
-                self._custom_attributes, "valueof_"
+            # Convert to JSON string
+            json_result = json.dumps(
+                result,
+                ensure_ascii=False,
+                indent=4,
+                default=str,
+                cls=DecimalEncoder,
             )
 
-        self._custom_attributes["name"] = self.name
-        #            "entity_id": self._unique_id,
-        self._custom_attributes["database"] = self.mysql_db
-        self._custom_attributes["default_query"] = self._default_query
-        self._custom_attributes["active_query"] = self._active_query
-        self._custom_attributes["available_rows"] = self._available_rows
-        self._custom_attributes["selected_row_number"] = self._active_row
-        self._custom_attributes["json_result"] = self._json_result
+            self._attributes["json_result"] = json_result
 
-        # self.async_schedule_update_ha_state()
-        _LOGGER.debug("Selected requested row")
+            self._attributes["query_date"] = self._query_date
+            self._attributes["query_time"] = self._query_time
 
-    def goto_service(self, call):  # noqa: D102
-        _LOGGER.debug("Executing goto_service")
-
-        entityid_to_modify = call.data.get("entity_id")
-
-        # Zoek de juiste entiteit op basis van de unieke identifier
-        entity_to_modify = None
-        for entity in entities:
-            if entity.entity_id == entityid_to_modify:
-                entity_to_modify = entity
-                break
-
-        if entity_to_modify:
-            rownumber = call.data.get("rownumber")
-            self.select_row(entity_to_modify, rownumber)
-            _LOGGER.debug("Executed goto_service")
+            # for idx, row in enumerate(results):
+            #     self._attributes[f"result_{idx}"] = row
+            self._state = len(result)
         else:
-            _LOGGER.error(
-                "Error executing service. The provided entity does not exists"
-            )
-
-    def execute_service(self, call):  # noqa: D102
-        _LOGGER.debug("Executing execute_service")
-
-        entityid_to_modify = call.data.get("entity_id")
-
-        # Zoek de juiste entiteit op basis van de unieke identifier
-        entity_to_modify = None
-        for entity in entities:
-            if entity.entity_id == entityid_to_modify:
-                entity_to_modify = entity
-                break
-
-        if entity_to_modify:
-            # Ophalen van de configuratie
-
-            _platform_config = self.hass.data.get(DOMAIN).get("platform")
-            _host = _platform_config.get(CONF_MYSQL_HOST)
-            _port = _platform_config.get(CONF_MYSQL_PORT)
-            _username = _platform_config.get(CONF_MYSQL_USERNAME)
-            _password = _platform_config.get(CONF_MYSQL_PASSWORD)
-
-            _database = entity_to_modify.mysql_db
-
-            _query = None
-            _query = call.data.get(CONF_QUERY)
-            if _query is None or _query == "":
-                _query = entity_to_modify.default_query
-
-            entity_to_modify._active_query = _query
-
-            try:
-                connection = mysql.connector.connect(
-                    host=_host,
-                    port=_port,
-                    username=_username,
-                    password=_password,
-                    database=_database,
-                )
-                with connection.cursor(buffered=True, dictionary=True) as cursor:
-                    cursor.execute(_query)
-                    _LOGGER.info(
-                        "Query executed successfully. Rows affected: %s",
-                        cursor.rowcount,
-                    )
-
-                    if cursor.rowcount > 0:
-                        _rows = cursor.fetchall()
-
-                        # Convert to JSON string
-                        _json_result = json.dumps(
-                            _rows,
-                            ensure_ascii=False,
-                            indent=4,
-                            default=str,
-                            cls=DecimalEncoder,
-                        )
-
-                        entity_to_modify._rows = _rows
-                        entity_to_modify._cursor_description = cursor.description
-                        entity_to_modify._json_result = _json_result
-                        entity_to_modify._available_rows = cursor.rowcount
-
-                        if entity_to_modify._available_rows > 0 and isinstance(
-                            entity_to_modify._rows[0], dict
-                        ):
-                            entity_to_modify._active_row = 0
-                        else:
-                            entity_to_modify._active_row = -1
-
-                        # This part should be moved to the update function
-                        self._custom_attributes.clear()
-                        entity_to_modify._attr_native_value = (
-                            entity_to_modify._available_rows
-                        )
-                        if entity_to_modify._available_rows > 0 and isinstance(
-                            entity_to_modify._rows[0], dict
-                        ):
-                            ###
-                            entity_to_modify._custom_attributes.update(
-                                self.convert_decimals(entity_to_modify._rows[0])
-                            )
-                            entity_to_modify._custom_attributes = self.rename_keys(
-                                entity_to_modify._custom_attributes, "valueof_"
-                            )
-
-                            entity_to_modify._state = "Query executed successfully"
-                        else:
-                            entity_to_modify._state = "Query returned no valid results"
-
-                        entity_to_modify._custom_attributes["name"] = self.name
-                        #            "entity_id": self._unique_id,
-                        entity_to_modify._custom_attributes["database"] = self.mysql_db
-                        entity_to_modify._custom_attributes[
-                            "default_query"
-                        ] = self._default_query
-                        entity_to_modify._custom_attributes[
-                            "active_query"
-                        ] = self._active_query
-                        entity_to_modify._custom_attributes[
-                            "available_rows"
-                        ] = self._available_rows
-                        entity_to_modify._custom_attributes[
-                            "selected_row_number"
-                        ] = self._active_row
-                        entity_to_modify._custom_attributes[
-                            "json_result"
-                        ] = self._json_result
-
-                        _LOGGER.debug("Executed execute_service")
-            except Exception as e:
-                _LOGGER.error("Error executing query: %s", str(e))
-                entity_to_modify._attr_native_value = -1
-                self._state = "Error executing query"
-            finally:
-                # self.update()
-                entity_to_modify.schedule_update_ha_state(force_refresh=True)
-                if connection:
-                    connection.close()
-
-
-#       self.write_ha_state()
+            self._state = 0
+            self._attributes = {}

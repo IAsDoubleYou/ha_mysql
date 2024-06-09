@@ -12,6 +12,6 @@
     "issue_tracker": "https://github.com/your/github/repo/issues",
     "pypi": "https://pypi.org/project/your-package/",
     "panel": false,
-    "requirements": [],
+    "requirements": ["mysql-connector-python==8.0.28"],
     "version": "1.0.0"
 }
