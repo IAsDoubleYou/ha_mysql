@@ -1,6 +1,6 @@
 from __future__ import annotations  # noqa: D100
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import decimal
 import json
 import logging
@@ -28,6 +28,9 @@ CONF_QUERY = "query"
 CONF_ROWNUMBER = "rownumber"
 SERVICE_SET_QUERY = "set_query"
 SERVICE_SELECT_RECORD = "select_record"
+
+# SCAN_INTERVAL = timedelta(seconds=30)
+# PARALLEL_UPDATES = 2
 
 
 # Definieer de schema's
@@ -213,9 +216,9 @@ class HAMySQLSensor(Entity):
 
     def update(self):  # noqa: D102
         result = self.execute_query()
-        if result:
-            self._attributes = {}
+        self._attributes = {}
 
+        if result:
             self._attributes.update(result[0])
             self._attributes = self.rename_keys(self._attributes, "valueof_")
 
@@ -232,12 +235,14 @@ class HAMySQLSensor(Entity):
 
             self._attributes["json_result"] = json_result
 
-            self._attributes["query_date"] = self._query_date
-            self._attributes["query_time"] = self._query_time
-
             # for idx, row in enumerate(results):
             #     self._attributes[f"result_{idx}"] = row
             self._state = len(result)
         else:
+            self._attributes["json_result"] = "{}"
+            self._attributes["selected_row"] = -1
             self._state = 0
-            self._attributes = {}
+
+        self._attributes["executed_sql_query"] = self._query
+        self._attributes["query_date"] = self._query_date
+        self._attributes["query_time"] = self._query_time
