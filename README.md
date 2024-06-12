@@ -6,7 +6,7 @@
 [hacs_shield]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge
 [hacs]: https://github.com/hacs/integration
 
-[latest_release]: https://github.com/IAsDoubleYou/homeassistant-ha_mysql/releases/latest
+[latest_release]: https://github.com/IAsDoubleYou/ha_mysql/releases/latest
 [releases_shield]: https://img.shields.io/github/release/IAsDoubleYou/ha_mysql.svg?style=for-the-badge
 
 [releases]: https://github.com/IAsDoubleYou/ha_mysql/releases/
@@ -15,12 +15,15 @@
 [community_forum_shield]: https://img.shields.io/static/v1.svg?label=%20&message=Forum&style=for-the-badge&color=41bdf5&logo=HomeAssistant&logoColor=white
 [community_forum]: https://community.home-assistant.io/t/mysql-query/734346
 
-# ha_mysql (!!! alpha version - under construction !!!)
+# HA MySQL (!!! under construction !!!)
 Custom component that provides a HA sensor to retrieve the result of a specified MySQL Query
 
 The component creates a sensor for each (initial) query that is defined in the configuration.yaml.
 The query can be overriden at run time when executing the **ha_mysql.set_query** function
 
+Please checkout [MySQL Query](https://github.com/IAsDoubleYou/homeassistant-mysql_query) component for a mysql *service* component.
+
+## HA MySQL usage
 The query should be written in the form:
 ```text
 select col1, col2, .... from table where condition
