@@ -15,7 +15,7 @@
 [community_forum_shield]: https://img.shields.io/static/v1.svg?label=%20&message=Forum&style=for-the-badge&color=41bdf5&logo=HomeAssistant&logoColor=white
 [community_forum]: https://community.home-assistant.io/t/mysql-query/734346
 
-# HA MySQL (!!Functional but also work in progress!!)
+# HA MySQL (!!Functional but also still some work in progress!!)
 Custom component that provides a HA sensor to retrieve the result of a specified MySQL Query
 
 The component creates a sensor for each (initial) query that is defined in the configuration.yaml.
