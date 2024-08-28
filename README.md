@@ -110,7 +110,7 @@ data:
   rownumber: 1
 ```
 
-## Multiple databases (STILL NEEDS TO BE IMPLEMENTED)
+## Multiple databases (ToDo)
 The database configured with the mysql_db configuration parameter in configuration.yaml acts as the default database for each query.
 However,the default database can be overridden for each query by providing <b>db4query</b> alongside the query parameter.
 
