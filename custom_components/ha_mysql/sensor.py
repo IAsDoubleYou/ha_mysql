@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
+from enum import Enum
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -17,18 +18,20 @@ from homeassistant.components.sensor import (
 from homeassistant.const import (
     CONF_DEVICE_CLASS,
     CONF_NAME,
-    CONF_SCAN_INTERVAL,
     CONF_UNIT_OF_MEASUREMENT,
     MAX_LENGTH_STATE_STATE,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import TemplateError
-from homeassistant.helpers import config_validation as cv, entity_platform
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import (
+    config_validation as cv,
+    entity_platform,
+    entity_registry as er,
+)
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.template import Template
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType, StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -40,7 +43,6 @@ from .const import (
     ATTR_QUERY_TIME,
     ATTR_ROW_COUNT,
     ATTR_SELECTED_ROW,
-    CONF_MAX_JSON_ROWS,
     CONF_MYSQL_DATABASE,
     CONF_MYSQL_HOST,
     CONF_QUERY,
@@ -52,7 +54,6 @@ from .const import (
     CONF_VALUE_COLUMN,
     CONF_VALUE_TEMPLATE,
     DATA_YAML_IMPORTED,
-    DEFAULT_SCAN_INTERVAL_SECONDS,
     DOMAIN,
     SERVICE_SELECT_RECORD,
     SERVICE_SET_QUERY,
@@ -104,17 +105,7 @@ async def async_setup_entry(
     entities: list[HAMySQLSensor] = []
     for sensor_config in sensors:
         coordinator = MySQLQueryCoordinator(
-            hass,
-            entry,
-            entry.runtime_data,
-            sensor_config[CONF_NAME],
-            sensor_config[CONF_QUERY],
-            timedelta(
-                seconds=sensor_config.get(
-                    CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_SECONDS
-                )
-            ),
-            sensor_config.get(CONF_MAX_JSON_ROWS, 0),
+            hass, entry, entry.runtime_data, sensor_config
         )
         entities.append(HAMySQLSensor(coordinator, entry, sensor_config))
 
@@ -200,9 +191,7 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
-            name=(
-                f"{entry.data[CONF_MYSQL_DATABASE]} @ {entry.data[CONF_MYSQL_HOST]}"
-            ),
+            name=f"{entry.data[CONF_MYSQL_DATABASE]} @ {entry.data[CONF_MYSQL_HOST]}",
             model="MySQL database",
             entry_type=DeviceEntryType.SERVICE,
         )
@@ -264,7 +253,7 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
 
         return data.row_count
 
-    def _convert(self, value: Any) -> Any:
+    def _convert(self, value: Any) -> StateType | date | datetime:
         """Convert the raw value into something the sensor can report."""
         if value is None:
             return None
@@ -308,7 +297,7 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         return value
 
     @property
-    def native_value(self) -> Any:
+    def native_value(self) -> StateType | date | datetime:
         """Return the row count, or the configured column or template value."""
         if (data := self.coordinator.data) is None:
             return None
@@ -354,14 +343,14 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         self.async_write_ha_state()
 
 
-def _enum_or_none(enum: type, value: str | None, name: str) -> Any:
+def _enum_or_none[EnumT: Enum](
+    enum: type[EnumT], value: str | None, name: str
+) -> EnumT | None:
     """Return the enum member for the value, or None when it does not exist."""
     if not value:
         return None
     try:
         return enum(value)
     except ValueError:
-        _LOGGER.error(
-            "Unknown %s %r configured for %s", enum.__name__, value, name
-        )
+        _LOGGER.error("Unknown %s %r configured for %s", enum.__name__, value, name)
         return None

@@ -14,21 +14,27 @@ import time
 from typing import Any
 
 from mysql.connector import errors as mysql_errors
-from mysql.connector.pooling import MySQLConnectionPool
+from mysql.connector.pooling import MySQLConnectionPool, PooledMySQLConnection
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_NAME, CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BINARY_PREVIEW_BYTES,
+    CONF_MAX_JSON_ROWS,
     CONF_MYSQL_DATABASE,
     CONF_MYSQL_HOST,
     CONF_MYSQL_PASSWORD,
     CONF_MYSQL_PORT,
     CONF_MYSQL_USERNAME,
+    CONF_QUERY,
     CONNECT_TIMEOUT,
+    DEFAULT_MAX_JSON_ROWS,
+    DEFAULT_SCAN_INTERVAL_SECONDS,
     DOMAIN,
     LARGE_RESULT_WARNING_THRESHOLD,
     MAX_QUERY_ATTEMPTS,
@@ -67,26 +73,64 @@ class MySQLQueryError(MySQLError):
     """Raised when the database rejects the query itself."""
 
 
-def _convert_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Convert driver specific types into values Home Assistant can store.
+def _decode_binary(value: bytes | bytearray) -> str:
+    """Return a readable representation of a BINARY, VARBINARY or BLOB value.
 
-    Decimal values are converted to strings, which is the behaviour this
-    integration has always had. SQL NULL is returned as None.
+    Text that happens to be stored in a binary column is returned as text.
+    Anything that is not valid UTF-8, such as an image or an encrypted value,
+    becomes a short hexadecimal preview instead, so a state or an attribute
+    never ends up holding raw bytes.
     """
-    return {
-        key: str(value) if isinstance(value, decimal.Decimal) else value
-        for key, value in row.items()
-    }
+    try:
+        return bytes(value).decode()
+    except UnicodeDecodeError:
+        preview = bytes(value[:BINARY_PREVIEW_BYTES]).hex()
+        suffix = "..." if len(value) > BINARY_PREVIEW_BYTES else ""
+        return f"0x{preview}{suffix}"
 
 
-class DecimalEncoder(json.JSONEncoder):
-    """JSON encoder that renders Decimal values as strings."""
+def _convert_value(value: Any) -> Any:
+    """Convert a single column value into something Home Assistant can store.
 
-    def default(self, o: Any) -> Any:
-        """Encode values the standard encoder does not support."""
+    SQL NULL stays None, and dates and timestamps are left as they are so the
+    date and timestamp device classes keep working. Everything the state
+    machine and the JSON encoder cannot handle is turned into text.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, decimal.Decimal):
+        # Kept as a string, which is the behaviour of earlier releases.
+        return str(value)
+    if isinstance(value, (bytes, bytearray)):
+        return _decode_binary(value)
+    if isinstance(value, timedelta):
+        # A TIME column comes back as a timedelta; "1:30:00" reads better.
+        return str(value)
+    if isinstance(value, set):
+        # A SET column comes back as a set, which is not JSON serialisable.
+        return sorted(value)
+    return value
+
+
+def _convert_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert every column of a result row. See _convert_value."""
+    return {key: _convert_value(value) for key, value in row.items()}
+
+
+class QueryResultEncoder(json.JSONEncoder):
+    """JSON encoder for the driver types the standard encoder rejects."""
+
+    def default(self, o: Any) -> str:
+        """Render an unsupported value as a string instead of raising.
+
+        Rows are converted by _convert_row before they get here, so this only
+        catches types that survive that, such as dates and timestamps.
+        """
         if isinstance(o, decimal.Decimal):
             return str(o)
-        return super().default(o)
+        if isinstance(o, (bytes, bytearray)):
+            return _decode_binary(o)
+        return str(o)
 
 
 @dataclass(frozen=True)
@@ -133,7 +177,7 @@ class MySQLConnectionManager:
             f"/{self._db_config['database']}"
         )
 
-    def _acquire(self) -> Any:
+    def _acquire(self) -> PooledMySQLConnection:
         """Return a healthy pooled connection, creating the pool if needed."""
         with self._lock:
             if self._pool is None:
@@ -172,7 +216,7 @@ class MySQLConnectionManager:
         last_error: Exception | None = None
 
         for attempt in range(1, MAX_QUERY_ATTEMPTS + 1):
-            connection = None
+            connection: PooledMySQLConnection | None = None
             try:
                 connection = self._acquire()
                 cursor = connection.cursor(buffered=True, dictionary=True)
@@ -239,24 +283,23 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
         hass: HomeAssistant,
         config_entry: ConfigEntry,
         manager: MySQLConnectionManager,
-        name: str,
-        query: str,
-        scan_interval: timedelta,
-        max_json_rows: int,
+        config: dict[str, Any],
     ) -> None:
-        """Initialise the coordinator for one query."""
+        """Initialise the coordinator from the stored sensor configuration."""
         super().__init__(
             hass,
             _LOGGER,
             config_entry=config_entry,
-            name=f"{DOMAIN} {name}",
-            update_interval=scan_interval,
+            name=f"{DOMAIN} {config[CONF_NAME]}",
+            update_interval=timedelta(
+                seconds=config.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_SECONDS)
+            ),
         )
         self._manager = manager
-        self._max_json_rows = max_json_rows
+        self._max_json_rows: int = config.get(CONF_MAX_JSON_ROWS, DEFAULT_MAX_JSON_ROWS)
         self._warned_large_result = False
-        self.default_query = query
-        self.query = query
+        self.default_query: str = config[CONF_QUERY]
+        self.query: str = self.default_query
 
     def _fetch(self, query: str) -> QueryResult:
         """Execute the query and build the result. Runs in an executor."""
@@ -300,8 +343,7 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
                 json_rows,
                 ensure_ascii=False,
                 indent=4,
-                default=str,
-                cls=DecimalEncoder,
+                cls=QueryResultEncoder,
             ),
             json_truncated=truncated,
             query_date=now.strftime("%Y-%m-%d"),

@@ -49,6 +49,9 @@ DEFAULT_SCAN_INTERVAL: Final = timedelta(seconds=DEFAULT_SCAN_INTERVAL_SECONDS)
 DEFAULT_MAX_JSON_ROWS: Final = 0
 # Number of rows above which a warning is logged, recommending max_json_rows.
 LARGE_RESULT_WARNING_THRESHOLD: Final = 1000
+# Number of bytes of a BINARY or BLOB column that are rendered as hexadecimal
+# when the value is not readable text.
+BINARY_PREVIEW_BYTES: Final = 32
 
 # Connection handling.
 CONNECT_TIMEOUT: Final = 10

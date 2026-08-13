@@ -6,12 +6,6 @@ from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.ha_mysql.const import DOMAIN
-from custom_components.ha_mysql.coordinator import (
-    MySQLConnectionError,
-    MySQLQueryError,
-)
-
 from .conftest import (
     CONFIG,
     CONNECTION,
@@ -21,6 +15,8 @@ from .conftest import (
     make_sensor,
     setup_entry,
 )
+from custom_components.ha_mysql.const import DOMAIN
+from custom_components.ha_mysql.coordinator import MySQLConnectionError, MySQLQueryError
 
 
 async def _import_yaml(hass: HomeAssistant, config: dict | None = None) -> None:
@@ -29,9 +25,7 @@ async def _import_yaml(hass: HomeAssistant, config: dict | None = None) -> None:
     await hass.async_block_till_done()
 
 
-async def test_yaml_creates_config_entry(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_yaml_creates_config_entry(hass: HomeAssistant, mock_execute) -> None:
     """configuration.yaml is imported into a config entry."""
     await _import_yaml(hass)
 
@@ -103,9 +97,7 @@ async def test_yaml_skips_invalid_sensor(hass: HomeAssistant, mock_execute) -> N
     assert [sensor["name"] for sensor in sensors] == ["Employees"]
 
 
-async def test_yaml_ignores_other_platforms(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_yaml_ignores_other_platforms(hass: HomeAssistant, mock_execute) -> None:
     """Sensors of other integrations are left alone."""
     config = {
         **CONFIG,
@@ -130,9 +122,7 @@ async def _run_import(hass: HomeAssistant, sensors: list[dict]) -> None:
     await hass.async_block_till_done()
 
 
-async def test_yaml_refreshes_existing_entry(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_yaml_refreshes_existing_entry(hass: HomeAssistant, mock_execute) -> None:
     """A changed query in configuration.yaml reaches the existing entry."""
     entry = make_entry([make_sensor(source="yaml")])
     await setup_entry(hass, entry)
@@ -148,9 +138,7 @@ async def test_yaml_refreshes_existing_entry(
     assert sensors[0]["query"] == "SELECT * FROM emp WHERE active = 1"
 
 
-async def test_yaml_import_keeps_ui_sensors(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_yaml_import_keeps_ui_sensors(hass: HomeAssistant, mock_execute) -> None:
     """Sensors added through the interface survive a YAML import."""
     # No source marker, so this one was added through the user interface.
     entry = make_entry([make_sensor(name="From UI", unique_id="abc123")])
@@ -167,7 +155,10 @@ async def test_yaml_import_drops_removed_yaml_sensors(
 ) -> None:
     """A sensor taken out of configuration.yaml disappears on the next start."""
     entry = make_entry(
-        [make_sensor(source="yaml"), make_sensor(name="Gone", unique_id="x", source="yaml")]
+        [
+            make_sensor(source="yaml"),
+            make_sensor(name="Gone", unique_id="x", source="yaml"),
+        ]
     )
     await setup_entry(hass, entry)
 

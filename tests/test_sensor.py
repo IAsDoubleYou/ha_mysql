@@ -11,14 +11,13 @@ from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from .conftest import ENTITY_ID, make_entry, make_sensor, setup_entry
 from custom_components.ha_mysql.const import (
     DOMAIN,
     SERVICE_SELECT_RECORD,
     SERVICE_SET_QUERY,
 )
 from custom_components.ha_mysql.coordinator import MySQLConnectionError
-
-from .conftest import ENTITY_ID, make_entry, make_sensor, setup_entry
 
 
 async def _advance(hass: HomeAssistant, freezer: FrozenDateTimeFactory) -> None:
@@ -62,9 +61,7 @@ async def test_unique_id_is_stable(hass: HomeAssistant, mock_execute) -> None:
     assert entry.unique_id == "ha_mysql_employees"
 
 
-async def test_sensor_is_linked_to_a_device(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_sensor_is_linked_to_a_device(hass: HomeAssistant, mock_execute) -> None:
     """Every sensor of a connection sits under one database device."""
     config_entry = make_entry()
     await setup_entry(hass, config_entry)
@@ -79,9 +76,7 @@ async def test_sensor_is_linked_to_a_device(
     assert entity.device_id == device.id
 
 
-async def test_friendly_name_is_unchanged(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_friendly_name_is_unchanged(hass: HomeAssistant, mock_execute) -> None:
     """The device does not creep into the name of existing sensors."""
     await setup_entry(hass, make_entry())
 
@@ -134,9 +129,7 @@ async def test_value_template(hass: HomeAssistant, mock_execute) -> None:
     assert hass.states.get(ENTITY_ID).state == "Alice of 2"
 
 
-async def test_value_template_beats_column(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_value_template_beats_column(hass: HomeAssistant, mock_execute) -> None:
     """The template wins when both a column and a template are configured."""
     await setup_entry(
         hass,
@@ -175,9 +168,7 @@ async def test_unknown_device_class_is_ignored(
     assert "device_class" not in state.attributes
 
 
-async def test_select_record_switches_row(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_select_record_switches_row(hass: HomeAssistant, mock_execute) -> None:
     """select_record exposes the columns of the requested row."""
     await setup_entry(hass, make_entry())
 
@@ -193,9 +184,7 @@ async def test_select_record_switches_row(
     assert attributes["selected_row"] == 1
 
 
-async def test_select_record_out_of_range(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_select_record_out_of_range(hass: HomeAssistant, mock_execute) -> None:
     """A row beyond the result set falls back to the first row."""
     await setup_entry(hass, make_entry())
 
@@ -336,9 +325,7 @@ async def test_max_json_rows_truncates(hass: HomeAssistant, mock_execute) -> Non
     assert "Bob" not in state.attributes["json_result"]
 
 
-async def test_removed_sensor_is_cleaned_up(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_removed_sensor_is_cleaned_up(hass: HomeAssistant, mock_execute) -> None:
     """An entity of a deleted sensor does not linger in the registry."""
     config_entry = make_entry()
     config_entry.add_to_hass(hass)

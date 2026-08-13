@@ -57,11 +57,7 @@ from .const import (
     DOMAIN,
     SOURCE_YAML,
 )
-from .coordinator import (
-    MySQLConnectionError,
-    MySQLConnectionManager,
-    MySQLQueryError,
-)
+from .coordinator import MySQLConnectionError, MySQLConnectionManager, MySQLQueryError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,9 +91,7 @@ def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
 
     return vol.Schema(
         {
-            vol.Required(
-                CONF_NAME, description=suggest(CONF_NAME)
-            ): TextSelector(),
+            vol.Required(CONF_NAME, description=suggest(CONF_NAME)): TextSelector(),
             vol.Required(CONF_QUERY, description=suggest(CONF_QUERY)): TextSelector(
                 TextSelectorConfig(multiline=True)
             ),
@@ -105,7 +99,9 @@ def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 CONF_SCAN_INTERVAL,
                 description=suggest(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_SECONDS),
             ): NumberSelector(
-                NumberSelectorConfig(min=1, max=86400, step=1, mode=NumberSelectorMode.BOX)
+                NumberSelectorConfig(
+                    min=1, max=86400, step=1, mode=NumberSelectorMode.BOX
+                )
             ),
             vol.Optional(
                 CONF_VALUE_COLUMN, description=suggest(CONF_VALUE_COLUMN)
@@ -142,7 +138,9 @@ def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 CONF_MAX_JSON_ROWS,
                 description=suggest(CONF_MAX_JSON_ROWS, DEFAULT_MAX_JSON_ROWS),
             ): NumberSelector(
-                NumberSelectorConfig(min=0, max=10000, step=1, mode=NumberSelectorMode.BOX)
+                NumberSelectorConfig(
+                    min=0, max=10000, step=1, mode=NumberSelectorMode.BOX
+                )
             ),
         }
     )
@@ -240,9 +238,7 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_import(
-        self, import_data: dict[str, Any]
-    ) -> ConfigFlowResult:
+    async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
         """Import the settings from configuration.yaml.
 
         This runs on every restart, so the entry keeps following the YAML file.
@@ -287,7 +283,9 @@ class HAMySQLOptionsFlow(OptionsFlow):
     @property
     def _sensors(self) -> list[dict[str, Any]]:
         """Return a copy of the configured sensors."""
-        return [dict(sensor) for sensor in self.config_entry.options.get(CONF_SENSORS, [])]
+        return [
+            dict(sensor) for sensor in self.config_entry.options.get(CONF_SENSORS, [])
+        ]
 
     def _save(self, sensors: list[dict[str, Any]]) -> ConfigFlowResult:
         """Store the new sensor list."""
