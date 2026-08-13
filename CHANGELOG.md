@@ -62,6 +62,8 @@ keep the entity IDs and the history they already had.
   more than one sensor at a time.
 - Sensors that are removed from the configuration also disappear from the
   entity registry.
+- Every release now ships a `homeassistant-ha_mysql.zip`, which is what HACS
+  installs and what a manual installation can be unpacked from.
 
 ### Fixed
 
