@@ -2,6 +2,7 @@
     "domain": "ha_mysql",
     "name": "HA MySQL Sensor",
     "codeowners": ["@IAsDoubleYou"],
+    "config_flow": true,
     "documentation": "https://github.com/IAsDoubleYou/ha_mysql/",
     "integration_type": "hub",
     "iot_class": "local_polling",

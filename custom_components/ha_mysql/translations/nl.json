@@ -1,0 +1,131 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MySQL-verbinding",
+        "description": "Vul de gegevens van de MySQL- of MariaDB-server in. De verbinding wordt getest voordat deze wordt opgeslagen.",
+        "data": {
+          "host": "Host",
+          "port": "Poort",
+          "username": "Gebruikersnaam",
+          "password": "Wachtwoord",
+          "database": "Database"
+        },
+        "data_description": {
+          "host": "Hostnaam of IP-adres van de databaseserver.",
+          "port": "Poort waarop de server luistert. Standaard is dat 3306.",
+          "username": "Gebruiker waaronder de query's draaien. Leesrechten volstaan.",
+          "database": "Database voor query's die zelf geen database noemen."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "De server is niet bereikbaar. Controleer de host, de poort en je firewall.",
+      "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
+      "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
+      "unknown": "Onverwachte fout. Bekijk het Home Assistant-logboek voor details."
+    },
+    "abort": {
+      "already_configured": "Deze database is al ingesteld."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MySQL-sensoren",
+        "menu_options": {
+          "add_sensor": "Sensor toevoegen",
+          "select_sensor": "Sensor bewerken",
+          "remove_sensor": "Sensoren verwijderen"
+        }
+      },
+      "add_sensor": {
+        "title": "Sensor toevoegen",
+        "description": "Standaard is de status van de sensor het aantal rijen dat de query oplevert. Vul een kolom of een template in om in plaats daarvan een waarde uit de resultset te tonen.",
+        "data": {
+          "name": "Naam",
+          "query": "Query",
+          "scan_interval": "Verversingsinterval (seconden)",
+          "value_column": "Waardekolom",
+          "value_template": "Waardetemplate",
+          "unit_of_measurement": "Eenheid",
+          "device_class": "Apparaatklasse",
+          "state_class": "Statusklasse",
+          "suggested_display_precision": "Weergavenauwkeurigheid",
+          "max_json_rows": "Maximum aantal rijen in json_result"
+        },
+        "data_description": {
+          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp.",
+          "value_column": "Kolom van de geselecteerde rij die als status wordt gebruikt.",
+          "value_template": "Template die de status oplevert. Gaat voor op de waardekolom. De variabelen row, rows en row_count zijn beschikbaar.",
+          "state_class": "Nodig voor langetermijnstatistieken. De waarde moet numeriek zijn.",
+          "max_json_rows": "0 bewaart de volledige resultset. Een limiet houdt grote resultaten uit de recorder-database."
+        }
+      },
+      "select_sensor": {
+        "title": "Sensor bewerken",
+        "data": {
+          "unique_id": "Sensor"
+        }
+      },
+      "edit_sensor": {
+        "title": "{name} bewerken",
+        "description": "Standaard is de status van de sensor het aantal rijen dat de query oplevert. Vul een kolom of een template in om in plaats daarvan een waarde uit de resultset te tonen.",
+        "data": {
+          "name": "Naam",
+          "query": "Query",
+          "scan_interval": "Verversingsinterval (seconden)",
+          "value_column": "Waardekolom",
+          "value_template": "Waardetemplate",
+          "unit_of_measurement": "Eenheid",
+          "device_class": "Apparaatklasse",
+          "state_class": "Statusklasse",
+          "suggested_display_precision": "Weergavenauwkeurigheid",
+          "max_json_rows": "Maximum aantal rijen in json_result"
+        },
+        "data_description": {
+          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp.",
+          "value_column": "Kolom van de geselecteerde rij die als status wordt gebruikt.",
+          "value_template": "Template die de status oplevert. Gaat voor op de waardekolom. De variabelen row, rows en row_count zijn beschikbaar.",
+          "state_class": "Nodig voor langetermijnstatistieken. De waarde moet numeriek zijn.",
+          "max_json_rows": "0 bewaart de volledige resultset. Een limiet houdt grote resultaten uit de recorder-database."
+        }
+      },
+      "remove_sensor": {
+        "title": "Sensoren verwijderen",
+        "description": "De geselecteerde sensoren en hun historie worden verwijderd.",
+        "data": {
+          "sensors": "Sensoren"
+        }
+      }
+    },
+    "error": {
+      "name_exists": "Er bestaat al een sensor met deze naam."
+    },
+    "abort": {
+      "sensor_not_found": "Die sensor bestaat niet meer."
+    }
+  },
+  "services": {
+    "set_query": {
+      "name": "Query instellen",
+      "description": "Vervangt de query van een sensor en ververst deze direct. Laat de query leeg om de query uit de configuratie te herstellen.",
+      "fields": {
+        "query": {
+          "name": "Query",
+          "description": "De SQL-query die vanaf nu wordt uitgevoerd."
+        }
+      }
+    },
+    "select_record": {
+      "name": "Record selecteren",
+      "description": "Selecteert de rij uit de resultset die via de valueof_-attributen beschikbaar wordt. De eerste rij is nummer 0.",
+      "fields": {
+        "rownumber": {
+          "name": "Rijnummer",
+          "description": "Nulgebaseerde index van de rij die wordt geselecteerd."
+        }
+      }
+    }
+  }
+}

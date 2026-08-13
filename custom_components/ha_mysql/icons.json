@@ -1,0 +1,10 @@
+{
+  "services": {
+    "set_query": {
+      "service": "mdi:database-edit"
+    },
+    "select_record": {
+      "service": "mdi:table-row"
+    }
+  }
+}
