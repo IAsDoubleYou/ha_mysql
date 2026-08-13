@@ -51,3 +51,6 @@ docs/_build/
 
 # Disk Station
 .DS_Store
+
+# Local-only Claude instructions
+CLAUDE.md
