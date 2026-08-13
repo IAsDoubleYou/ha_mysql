@@ -1,4 +1,111 @@
 {
+  "config": {
+    "step": {
+      "user": {
+        "title": "MySQL connection",
+        "description": "Enter the details of the MySQL or MariaDB server. The connection is tested before it is saved.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password",
+          "database": "Database"
+        },
+        "data_description": {
+          "host": "Host name or IP address of the database server.",
+          "port": "Port the server listens on. The default is 3306.",
+          "username": "User the queries run as. Read only rights are enough.",
+          "database": "Database used for queries that do not name one themselves."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the server. Check the host, the port and your firewall.",
+      "invalid_auth": "The server refused the username or password.",
+      "unknown_database": "The database does not exist, or this user has no access to it.",
+      "unknown": "Unexpected error. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "This database is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MySQL sensors",
+        "menu_options": {
+          "add_sensor": "Add a sensor",
+          "select_sensor": "Edit a sensor",
+          "remove_sensor": "Remove sensors"
+        }
+      },
+      "add_sensor": {
+        "title": "Add a sensor",
+        "description": "By default the state of the sensor is the number of rows the query returns. Fill in a column or a template to report a value from the result set instead.",
+        "data": {
+          "name": "Name",
+          "query": "Query",
+          "scan_interval": "Update interval (seconds)",
+          "value_column": "Value column",
+          "value_template": "Value template",
+          "unit_of_measurement": "Unit of measurement",
+          "device_class": "Device class",
+          "state_class": "State class",
+          "suggested_display_precision": "Display precision",
+          "max_json_rows": "Maximum rows in json_result"
+        },
+        "data_description": {
+          "query": "The SQL query to run, for example SELECT * FROM emp.",
+          "value_column": "Column of the selected row to use as the state.",
+          "value_template": "Template that returns the state. Takes precedence over the value column. The variables row, rows and row_count are available.",
+          "state_class": "Needed for long term statistics. The value has to be numeric.",
+          "max_json_rows": "0 keeps the whole result set. A limit keeps large results out of the recorder database."
+        }
+      },
+      "select_sensor": {
+        "title": "Edit a sensor",
+        "data": {
+          "unique_id": "Sensor"
+        }
+      },
+      "edit_sensor": {
+        "title": "Edit {name}",
+        "description": "By default the state of the sensor is the number of rows the query returns. Fill in a column or a template to report a value from the result set instead.",
+        "data": {
+          "name": "Name",
+          "query": "Query",
+          "scan_interval": "Update interval (seconds)",
+          "value_column": "Value column",
+          "value_template": "Value template",
+          "unit_of_measurement": "Unit of measurement",
+          "device_class": "Device class",
+          "state_class": "State class",
+          "suggested_display_precision": "Display precision",
+          "max_json_rows": "Maximum rows in json_result"
+        },
+        "data_description": {
+          "query": "The SQL query to run, for example SELECT * FROM emp.",
+          "value_column": "Column of the selected row to use as the state.",
+          "value_template": "Template that returns the state. Takes precedence over the value column. The variables row, rows and row_count are available.",
+          "state_class": "Needed for long term statistics. The value has to be numeric.",
+          "max_json_rows": "0 keeps the whole result set. A limit keeps large results out of the recorder database."
+        }
+      },
+      "remove_sensor": {
+        "title": "Remove sensors",
+        "description": "The selected sensors and their history are removed.",
+        "data": {
+          "sensors": "Sensors"
+        }
+      }
+    },
+    "error": {
+      "name_exists": "A sensor with this name already exists."
+    },
+    "abort": {
+      "sensor_not_found": "That sensor no longer exists."
+    }
+  },
   "services": {
     "set_query": {
       "name": "Set query",

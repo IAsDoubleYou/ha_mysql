@@ -16,6 +16,7 @@ from typing import Any
 from mysql.connector import errors as mysql_errors
 from mysql.connector.pooling import MySQLConnectionPool
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -51,6 +52,11 @@ _CONNECTION_ERRORS = (
 
 class MySQLError(HomeAssistantError):
     """Base error for the HA MySQL integration."""
+
+    def __init__(self, message: str, errno: int | None = None) -> None:
+        """Keep the driver error code so callers can tell causes apart."""
+        super().__init__(message)
+        self.errno = errno
 
 
 class MySQLConnectionError(MySQLError):
@@ -191,7 +197,9 @@ class MySQLConnectionManager:
             except mysql_errors.Error as err:
                 # Syntax errors, missing tables, denied privileges: retrying
                 # would only repeat the same failure.
-                raise MySQLQueryError(f"Query failed: {err}") from err
+                raise MySQLQueryError(
+                    f"Query failed: {err}", getattr(err, "errno", None)
+                ) from err
             else:
                 return [_convert_row(row) for row in rows]
             finally:
@@ -203,8 +211,20 @@ class MySQLConnectionManager:
                 time.sleep(RETRY_DELAY)
 
         raise MySQLConnectionError(
-            f"Could not reach MySQL at {self.target}: {last_error}"
+            f"Could not reach MySQL at {self.target}: {last_error}",
+            getattr(last_error, "errno", None),
         )
+
+    def test_connection(self) -> None:
+        """Verify the settings by running a trivial query.
+
+        Blocking, run in an executor. Raises MySQLConnectionError when the
+        server cannot be reached and MySQLQueryError when it refuses us.
+        """
+        try:
+            self.execute("SELECT 1")
+        finally:
+            self.close()
 
     def close(self) -> None:
         """Release every pooled connection. Blocking, run in an executor."""
@@ -217,6 +237,7 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
     def __init__(
         self,
         hass: HomeAssistant,
+        config_entry: ConfigEntry,
         manager: MySQLConnectionManager,
         name: str,
         query: str,
@@ -227,6 +248,7 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name=f"{DOMAIN} {name}",
             update_interval=scan_interval,
         )
