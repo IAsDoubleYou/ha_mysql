@@ -1,21 +1,11 @@
+# HA MySQL Sensor for Home Assistant
+
 [![HACS Custom][hacs_shield]][hacs]
 [![GitHub Latest Release][releases_shield]][latest_release]
+[![GitHub Downloads (latest Release)][downloads_latest_shield]][latest_release]
 [![GitHub All Releases][downloads_total_shield]][releases]
+[![Tests][tests_shield]][tests]
 [![Community Forum][community_forum_shield]][community_forum]
-
-[hacs_shield]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge
-[hacs]: https://github.com/hacs/integration
-
-[latest_release]: https://github.com/IAsDoubleYou/ha_mysql/releases/latest
-[releases_shield]: https://img.shields.io/github/release/IAsDoubleYou/ha_mysql.svg?style=for-the-badge
-
-[releases]: https://github.com/IAsDoubleYou/ha_mysql/releases/
-[downloads_total_shield]: https://img.shields.io/github/downloads/IAsDoubleYou/ha_mysql/total?style=for-the-badge
-
-[community_forum_shield]: https://img.shields.io/static/v1.svg?label=%20&message=Forum&style=for-the-badge&color=41bdf5&logo=HomeAssistant&logoColor=white
-[community_forum]: https://community.home-assistant.io/t/mysql-query/734346
-
-# HA MySQL
 
 Home Assistant custom integration that turns the result of a MySQL or MariaDB query into a sensor.
 
@@ -412,3 +402,15 @@ sensor:
 ```
 
 The user has to have `SELECT` rights on that database as well.
+
+[hacs_shield]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square
+[hacs]: https://github.com/hacs/integration
+[latest_release]: https://github.com/IAsDoubleYou/ha_mysql/releases/latest
+[releases_shield]: https://img.shields.io/github/v/release/IAsDoubleYou/ha_mysql?style=flat-square
+[releases]: https://github.com/IAsDoubleYou/ha_mysql/releases/
+[downloads_total_shield]: https://img.shields.io/github/downloads/IAsDoubleYou/ha_mysql/total?style=flat-square
+[downloads_latest_shield]: https://img.shields.io/github/downloads/IAsDoubleYou/ha_mysql/latest/total?style=flat-square
+[tests_shield]: https://img.shields.io/github/actions/workflow/status/IAsDoubleYou/ha_mysql/tests.yaml?branch=main&label=tests&style=flat-square
+[tests]: https://github.com/IAsDoubleYou/ha_mysql/actions/workflows/tests.yaml
+[community_forum_shield]: https://img.shields.io/static/v1.svg?label=%20&message=Forum&style=flat-square&color=41bdf5&logo=HomeAssistant&logoColor=white
+[community_forum]: https://community.home-assistant.io/t/mysql-query/734346
