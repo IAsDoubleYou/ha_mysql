@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 import decimal
 import json
 from unittest.mock import MagicMock, patch
@@ -9,12 +10,13 @@ from unittest.mock import MagicMock, patch
 from mysql.connector import errors as mysql_errors
 import pytest
 
+from custom_components.ha_mysql.const import BINARY_PREVIEW_BYTES
 from custom_components.ha_mysql.coordinator import (
-    DecimalEncoder,
     MySQLConnectionError,
     MySQLConnectionManager,
     MySQLQueryError,
     QueryResult,
+    QueryResultEncoder,
     _convert_row,
 )
 
@@ -48,10 +50,38 @@ def test_convert_row_stringifies_decimals() -> None:
     assert _convert_row(row) == {"amount": "10.25", "note": None, "count": 3}
 
 
-def test_decimal_encoder() -> None:
-    """The JSON encoder renders Decimal values as strings."""
-    dumped = json.dumps({"amount": decimal.Decimal("1.5")}, cls=DecimalEncoder)
-    assert dumped == '{"amount": "1.5"}'
+def test_convert_row_decodes_text_in_binary_columns() -> None:
+    """A BINARY or BLOB column holding text is returned as text."""
+    row = {"note": b"hello", "raw": bytearray(b"world")}
+    assert _convert_row(row) == {"note": "hello", "raw": "world"}
+
+
+def test_convert_row_previews_binary_data() -> None:
+    """A BLOB that is not text becomes a short hexadecimal preview."""
+    assert _convert_row({"blob": b"\xff\xfe"}) == {"blob": "0xfffe"}
+
+    long_blob = b"\xff" * (BINARY_PREVIEW_BYTES + 10)
+    converted = _convert_row({"blob": long_blob})["blob"]
+    assert converted == f"0x{'ff' * BINARY_PREVIEW_BYTES}..."
+
+
+def test_convert_row_handles_time_and_set_columns() -> None:
+    """TIME and SET columns become values that can be stored and serialised."""
+    row = {"duration": timedelta(hours=1, minutes=30), "tags": {"b", "a"}}
+    assert _convert_row(row) == {"duration": "1:30:00", "tags": ["a", "b"]}
+
+
+def test_query_result_encoder() -> None:
+    """The JSON encoder falls back to strings instead of raising."""
+    dumped = json.dumps(
+        {"amount": decimal.Decimal("1.5"), "raw": b"\xff", "when": timedelta(hours=2)},
+        cls=QueryResultEncoder,
+    )
+    assert json.loads(dumped) == {
+        "amount": "1.5",
+        "raw": "0xff",
+        "when": "2:00:00",
+    }
 
 
 def test_query_result_row_count() -> None:

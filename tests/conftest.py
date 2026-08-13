@@ -6,8 +6,8 @@ from collections.abc import Generator
 from typing import Any
 from unittest.mock import patch
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
 
@@ -87,11 +87,8 @@ async def setup_entry(hass: HomeAssistant, entry: MockConfigEntry) -> None:
 
 
 @pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(
-    enable_custom_integrations: None,
-) -> Generator[None]:
+def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable loading of the custom integration in every test."""
-    yield
 
 
 @pytest.fixture

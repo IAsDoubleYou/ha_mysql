@@ -182,6 +182,21 @@ Every sensor exposes these attributes:
 
 The `valueof_` prefix avoids collisions with attributes such as `friendly_name`. A column named `friendly_name` becomes `valueof_friendly_name`.
 
+### Column types
+
+Most columns come back as the type you would expect. These are converted so they can be stored in a state, in an attribute and in `json_result`:
+
+| Column type | Becomes |
+|---|---|
+| `DECIMAL`, `NUMERIC` | A string, for example `1000.50`. Use `float` in a template to calculate with it |
+| `BINARY`, `VARBINARY`, `BLOB` | The text it holds. Data that is not valid UTF-8 becomes a short hexadecimal preview such as `0x89504e47...` |
+| `TIME` | A readable duration, for example `1:30:00` |
+| `SET` | A sorted list of the selected members |
+| `DATE`, `DATETIME`, `TIMESTAMP` | Left as they are, so `device_class: date` and `device_class: timestamp` work |
+| `NULL` | `None`, which shows up as `unknown` in the state |
+
+Storing an image or another large binary value in a sensor is a bad idea regardless. Select it as a length or a checksum instead, for example `SELECT LENGTH(photo) AS bytes FROM staff`.
+
 ## Examples
 
 ### Daily energy consumption

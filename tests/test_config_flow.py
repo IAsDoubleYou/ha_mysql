@@ -8,13 +8,9 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
 
-from custom_components.ha_mysql.const import DOMAIN
-from custom_components.ha_mysql.coordinator import (
-    MySQLConnectionError,
-    MySQLQueryError,
-)
-
 from .conftest import CONNECTION, UNIQUE_ID, make_entry, make_sensor, setup_entry
+from custom_components.ha_mysql.const import DOMAIN
+from custom_components.ha_mysql.coordinator import MySQLConnectionError, MySQLQueryError
 
 USER_INPUT = {
     "host": "db.local",
@@ -81,9 +77,7 @@ async def test_user_flow_invalid_auth(hass: HomeAssistant, mock_execute) -> None
     assert result["errors"] == {"base": "invalid_auth"}
 
 
-async def test_user_flow_unknown_database(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_user_flow_unknown_database(hass: HomeAssistant, mock_execute) -> None:
     """A missing database is reported as such."""
     mock_execute.side_effect = MySQLQueryError("Unknown database", 1049)
 
@@ -271,9 +265,7 @@ async def test_options_remove_sensor(hass: HomeAssistant, mock_execute) -> None:
     assert hass.states.get("sensor.departments") is None
 
 
-async def test_options_menu_without_sensors(
-    hass: HomeAssistant, mock_execute
-) -> None:
+async def test_options_menu_without_sensors(hass: HomeAssistant, mock_execute) -> None:
     """Editing and removing are hidden while there are no sensors."""
     entry = make_entry([])
     await setup_entry(hass, entry)

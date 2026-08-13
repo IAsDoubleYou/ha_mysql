@@ -45,11 +45,7 @@ from .const import (
     PLATFORMS,
     SOURCE_YAML,
 )
-from .coordinator import (
-    MySQLConnectionError,
-    MySQLConnectionManager,
-    MySQLQueryError,
-)
+from .coordinator import MySQLConnectionError, MySQLConnectionManager, MySQLQueryError
 from .helpers import generate_unique_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -79,7 +75,9 @@ YAML_SENSOR_SCHEMA = vol.Schema(
         vol.Required(CONF_NAME): cv.string,
         vol.Required(CONF_QUERY): cv.string,
         vol.Optional(CONF_SCAN_INTERVAL): cv.time_period,
-        vol.Optional(CONF_MAX_JSON_ROWS, default=DEFAULT_MAX_JSON_ROWS): cv.positive_int,
+        vol.Optional(
+            CONF_MAX_JSON_ROWS, default=DEFAULT_MAX_JSON_ROWS
+        ): cv.positive_int,
         vol.Optional(CONF_VALUE_COLUMN): cv.string,
         vol.Optional(CONF_VALUE_TEMPLATE): cv.template,
         vol.Optional(CONF_UNIT_OF_MEASUREMENT): cv.string,
