@@ -55,3 +55,6 @@ docs/_build/
 
 # Local-only Claude instructions
 CLAUDE.md
+
+# Release archive, built locally and attached to the GitHub release
+homeassistant-ha_mysql.zip
