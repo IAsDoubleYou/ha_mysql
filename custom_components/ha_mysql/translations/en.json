@@ -1,0 +1,24 @@
+{
+  "services": {
+    "set_query": {
+      "name": "Set query",
+      "description": "Replaces the query of a sensor and refreshes it immediately. Leave the query empty to restore the query from the configuration.",
+      "fields": {
+        "query": {
+          "name": "Query",
+          "description": "The SQL query to execute from now on."
+        }
+      }
+    },
+    "select_record": {
+      "name": "Select record",
+      "description": "Selects the row of the result set that is exposed through the valueof_ attributes. The first row is number 0.",
+      "fields": {
+        "rownumber": {
+          "name": "Row number",
+          "description": "Zero based index of the row to select."
+        }
+      }
+    }
+  }
+}

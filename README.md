@@ -47,7 +47,7 @@ This component can be installed using HACS. Please follow directions [here](http
 1. Using the tool of choice open the directory (folder) for your HA configuration (where you find `configuration.yaml`).
 2. If you do not have a `custom_components` directory (folder) there, you need to create it.
 3. In the `custom_components` directory (folder) create a new folder called `ha_mysql`.
-4. Download _all_ the files from the `custom_components/mysql_query/` directory (folder) of this repository.
+4. Download _all_ the files from the `custom_components/ha_mysql/` directory (folder) of this repository.
 5. Place the files you downloaded in the new directory (folder) you created.
 6. Restart Home Assistant
 7. Apply the <i>configuration</i> as described below
@@ -68,15 +68,21 @@ sensor:
   name: <desired query name>
   query: <initial query>
 ```
-The port number (mysql_port) is optional and defaults to 3306
-The database option will (also?) be placed on the query level. 
+The port number is optional and defaults to 3306. Both `name` and `query` are required for every sensor.
 
 <b>Examples:</b><br>
-```text
-- platform: ha_mysql
-  query: SELECT * FROM emp
-- platform: ha_mysql
-  query: SELECT * FROM dept
+```yaml
+sensor:
+  - platform: ha_mysql
+    name: Employees
+    query: SELECT * FROM emp
+  - platform: ha_mysql
+    name: Departments
+    query: SELECT * FROM dept
+    scan_interval: 300
+```
+
+The optional `scan_interval` (in seconds) controls how often the query runs and defaults to 30 seconds.
 
 ## Services
 1. ha_mysql.set_query (entity_id, query)
@@ -89,39 +95,42 @@ Being able to replace the initial query can be useful to build dynamic quries th
 
 ### Request
 <b>Examples:</b><br>
-```text
-
-service: ha_mysql.set_query
-data:
+```yaml
+action: ha_mysql.set_query
+target:
   entity_id: sensor.department
+data:
   query: SELECT 'Hello Friends' FROM DUAL
 ```
 
+Calling the service without a `query`, or with an empty one, restores the query from `configuration.yaml`. The sensor is refreshed immediately after the query is changed.
+
 ### ha_mysql.select_record
-The service should be called by passing the entity_id of the sensor and a rownumber parameter. The rownumber specifies the number of the row of the resultset to activate. This will cause the fields of the selected record to become available as attributes with names that corresponds to the names of the selected colums, prefixed by the string 'value_of'. This prefix is used to avoid collision with other static attributes like query_date, query_time, friendly_name etc.
-For example: if the selection list of the query contains a field name 'friendly_name', this will become available as a dynamic attribute with the name 'valueof_friendlyname'.
-Be aware that the first row is rownumber 0 and the last row is value of the state - 1.
+The service should be called by passing the entity_id of the sensor and a rownumber parameter. The rownumber specifies the number of the row of the resultset to activate. This will cause the fields of the selected record to become available as attributes with names that correspond to the names of the selected columns, prefixed by the string `valueof_`. This prefix is used to avoid collision with other static attributes like query_date, query_time, friendly_name etc.
+For example: if the selection list of the query contains a field named `friendly_name`, this will become available as a dynamic attribute with the name `valueof_friendly_name`.
+Be aware that the first row is rownumber 0 and the last row is the value of the state - 1.
 In the example below the *second* row (rownumber: 1) will be selected.
 
-```text
-service: ha_mysql.select_record
-data:
+```yaml
+action: ha_mysql.select_record
+target:
   entity_id: sensor.emp
+data:
   rownumber: 1
 ```
 
-## Multiple databases (ToDo)
-The database configured with the mysql_db configuration parameter in configuration.yaml acts as the default database for each query.
-However,the default database can be overridden for each query by providing <b>db4query</b> alongside the query parameter.
+## Multiple databases (not implemented yet)
+> **Note:** this is a planned feature. It is **not available** in the current release; the `database` option from `configuration.yaml` is used for every query.
 
-Example:
-```text
-service: ha_mysql.set_query
-data:
-  entity_id: sensor.department
-  query: select "hello world" FROM DUAL
-  database: personnel
+The idea is that the database configured with the `database` configuration parameter acts as the default database for each query, and that this default can be overridden per query.
+
+A query can still read from another database on the same server by qualifying the table name:
+
+```yaml
+sensor:
+  - platform: ha_mysql
+    name: Departments
+    query: SELECT * FROM personnel.dept
 ```
-The query from this example will be executed against the personnel database, although the default database specified by the database configuration parameter may be a complete different database.
 
 

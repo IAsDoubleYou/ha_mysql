@@ -1,248 +1,185 @@
-from __future__ import annotations  # noqa: D100
+"""Sensor platform for the HA MySQL integration."""
 
-from datetime import datetime, timedelta
-import decimal
-import json
+from __future__ import annotations
+
 import logging
+from typing import Any
 
-import mysql.connector
 import voluptuous as vol
 
-# from homeassistant.components.sensor import PLATFORM_SCHEMA
+from homeassistant.components.sensor import (
+    PLATFORM_SCHEMA as SENSOR_PLATFORM_SCHEMA,
+    SensorEntity,
+)
+from homeassistant.const import CONF_NAME, CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.entity import Entity
+from homeassistant.exceptions import PlatformNotReady
+from homeassistant.helpers import config_validation as cv, entity_platform
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import (
+    ATTR_EXECUTED_QUERY,
+    ATTR_JSON_RESULT,
+    ATTR_JSON_TRUNCATED,
+    ATTR_QUERY_DATE,
+    ATTR_QUERY_TIME,
+    ATTR_SELECTED_ROW,
+    CONF_MAX_JSON_ROWS,
+    CONF_QUERY,
+    CONF_ROWNUMBER,
+    DATA_MANAGER,
+    DEFAULT_MAX_JSON_ROWS,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    SERVICE_SELECT_RECORD,
+    SERVICE_SET_QUERY,
+    VALUE_PREFIX,
+)
+from .coordinator import MySQLQueryCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-CONF_SENSORS = "sensors"
-
-DOMAIN = "ha_mysql"
-CONF_NAME = "name"
-CONF_MYSQL_HOST = "host"
-CONF_MYSQL_PORT = "port"
-CONF_MYSQL_USERNAME = "username"
-CONF_MYSQL_PASSWORD = "password"
-CONF_MYSQL_DATABASE = "database"
-CONF_QUERY = "query"
-CONF_ROWNUMBER = "rownumber"
-SERVICE_SET_QUERY = "set_query"
-SERVICE_SELECT_RECORD = "select_record"
-
-# SCAN_INTERVAL = timedelta(seconds=30)
-# PARALLEL_UPDATES = 2
-
-
-# Definieer de schema's
-SENSOR_SCHEMA = vol.Schema(
+PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_NAME): cv.string,
         vol.Required(CONF_QUERY): cv.string,
+        vol.Optional(CONF_MAX_JSON_ROWS, default=DEFAULT_MAX_JSON_ROWS): vol.All(
+            vol.Coerce(int), vol.Range(min=0)
+        ),
     }
 )
 
-# PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-#     {
-#         vol.Required(CONF_HOST): cv.string,
-#         vol.Required(CONF_USERNAME): cv.string,
-#         vol.Required(CONF_PASSWORD): cv.string,
-#         vol.Required(CONF_DATABASE): cv.string,
-#         vol.Required(CONF_SENSORS): vol.All(cv.ensure_list, [SENSOR_SCHEMA]),
-#     }
-# )
-
-entities = []
+SET_QUERY_SCHEMA = {vol.Optional(CONF_QUERY): cv.string}
+SELECT_RECORD_SCHEMA = {
+    vol.Required(CONF_ROWNUMBER): vol.All(vol.Coerce(int), vol.Range(min=0))
+}
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
-    """Get the platform configuration and create the sensors."""
-    component_config = hass.data[DOMAIN]
-    host = component_config.get(CONF_MYSQL_HOST)
-    port = component_config.get(CONF_MYSQL_PORT)
-    username = component_config.get(CONF_MYSQL_USERNAME)
-    password = component_config.get(CONF_MYSQL_PASSWORD)
-    database = component_config.get(CONF_MYSQL_DATABASE)
-
-    name = config[CONF_NAME]
-    query = config[CONF_QUERY]
-
-    db = mysql.connector.connect(
-        host=host, port=port, user=username, password=password, database=database
-    )
-
-    entity = HAMySQLSensor(hass, config, name, query, db)
-    entities.append(entity)
-    add_entities([entity], True)
-
-    hass.services.register(DOMAIN, SERVICE_SET_QUERY, handle_set_query_service)
-    hass.services.register(DOMAIN, SERVICE_SELECT_RECORD, handle_select_record)
-
-
-def handle_set_query_service(call):  # noqa: D103
-    _LOGGER.debug("Executing set_query service")
-
-    entityid_to_modify = call.data.get("entity_id")
-
-    # Locate the entity that needs to be addressed
-    entity_to_modify = None
-    for entity in entities:
-        if entity.entity_id == entityid_to_modify:
-            entity_to_modify = entity
-            break
-
-    query = None
-    query = call.data.get(CONF_QUERY)
-    if query is None or query == "":
-        query = entity_to_modify.default_query
-    else:
-        entity_to_modify.query = query
-
-    entity_to_modify.selected_row = 0
-
-
-def handle_select_record(call):  # noqa: D103
-    _LOGGER.debug("Executing select_record service")
-
-    entityid_to_modify = call.data.get("entity_id")
-
-    # Zoek de juiste entiteit op basis van de unieke identifier
-    entity_to_modify = None
-    for entity in entities:
-        if entity.entity_id == entityid_to_modify:
-            entity_to_modify = entity
-            break
-
-    rownumber = call.data.get(CONF_ROWNUMBER)
-    if rownumber is not None:
-        entity_to_modify.selected_row = rownumber
-
-
-def generate_unique_id(name):
+def generate_unique_id(name: str) -> str:
     """Generate a unique ID for the sensor."""
     return f"{DOMAIN}_{name.lower().replace(' ', '_')}"
 
 
-class DecimalEncoder(json.JSONEncoder):  # noqa: D101
-    def default(self, o):  # noqa: D102
-        if isinstance(o, decimal.Decimal):
-            return str(o)
-        return super().default(o)
+def rename_keys(old_dict: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """Return a copy of the dict with every key prefixed."""
+    return {f"{prefix}{key}": value for key, value in old_dict.items()}
 
 
-# Custom sensor klasse
-class HAMySQLSensor(Entity):
-    """HAMySQLSensor clas."""
+async def async_setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
+    """Set up a HA MySQL sensor from configuration.yaml."""
+    data = hass.data.get(DOMAIN)
+    if not data:
+        _LOGGER.error(
+            "No ha_mysql: section found in configuration.yaml; add the database "
+            "settings before configuring a ha_mysql sensor"
+        )
+        return
 
-    def __init__(self, hass: HomeAssistant, config, name, query, db) -> None:  # noqa: D107
-        self._name = name
-        self._query = query
-        self._db = db
-        self._unique_id = generate_unique_id(name)
-        self._hass = hass
-        self._state = None
+    name: str = config[CONF_NAME]
+    query: str = config[CONF_QUERY]
+    scan_interval = config.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+
+    coordinator = MySQLQueryCoordinator(
+        hass,
+        data[DATA_MANAGER],
+        name,
+        query,
+        scan_interval,
+        config[CONF_MAX_JSON_ROWS],
+    )
+
+    await coordinator.async_refresh()
+    if not coordinator.last_update_success:
+        # Home Assistant retries the platform setup with a growing backoff.
+        raise PlatformNotReady(
+            f"Initial query for {name} failed: {coordinator.last_exception}"
+        )
+
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        SERVICE_SET_QUERY, SET_QUERY_SCHEMA, "async_set_query"
+    )
+    platform.async_register_entity_service(
+        SERVICE_SELECT_RECORD, SELECT_RECORD_SCHEMA, "async_select_record"
+    )
+
+    async_add_entities([HAMySQLSensor(coordinator, name)])
+
+
+class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
+    """Sensor holding the result of a MySQL query.
+
+    The state is the number of rows returned by the query. The columns of the
+    selected row are exposed as attributes prefixed with `valueof_`.
+    """
+
+    _attr_icon = "mdi:database-search"
+
+    def __init__(self, coordinator: MySQLQueryCoordinator, name: str) -> None:
+        """Initialise the sensor."""
+        super().__init__(coordinator)
+        self._attr_name = name
+        self._attr_unique_id = generate_unique_id(name)
         self._selected_row = 0
 
-        self._query_date = None
-        self._query_time = None
-
-        self._attributes = {}
+    @property
+    def native_value(self) -> int | None:
+        """Return the number of rows of the last successful query."""
+        if (data := self.coordinator.data) is None:
+            return None
+        return data.row_count
 
     @property
-    def __str__(self):  # noqa: D105
-        return str(getattr(self, self._name))
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the query metadata and the columns of the selected row."""
+        if (data := self.coordinator.data) is None:
+            return {}
 
-    @property
-    def name(self):  # noqa: D102
-        return self._name
+        attributes: dict[str, Any] = {}
 
-    @property
-    def state(self):  # noqa: D102
-        return self._state
-
-    @property
-    def unique_id(self):
-        """Return a unique ID."""
-        return self._unique_id
-
-    @property
-    def extra_state_attributes(self):  # noqa: D102
-        return self._attributes
-
-    @property
-    def query(self):  # noqa: D102
-        return self._query
-
-    @query.setter
-    def query(self, value):  # noqa: D102
-        self._query = value
-
-    @property
-    def selected_row(self):  # noqa: D102
-        return self._selected_row
-
-    @selected_row.setter
-    def selected_row(self, value):  # noqa: D102
-        self._selected_row = value
-
-    def convert_decimals(self, data):
-        """Convert decimals in data structure to strings."""
-        for key, value in data.items():
-            if isinstance(value, decimal.Decimal):
-                data[key] = str(value)
-
-    def rename_keys(self, old_dict, prefix):  # noqa: D102
-        """Rename the fields of a dict."""
-        new_dict = {}
-        for key, value in old_dict.items():
-            new_key = prefix + key
-            new_dict[new_key] = value
-        return new_dict
-
-    def execute_query(self):  # noqa: D102
-        current_time = datetime.now()
-        self._query_date = current_time.strftime("%Y-%m-%d")
-        self._query_time = current_time.strftime("%H:%M:%S")
-
-        cursor = self._db.cursor(buffered=True, dictionary=True)
-
-        cursor.execute(self._query)
-        result = cursor.fetchall()
-
-        for record in result:
-            self.convert_decimals(record)
-
-        cursor.close()
-        return result
-
-    def update(self):  # noqa: D102
-        result = self.execute_query()
-        self._attributes = {}
-
-        if result:
-            self._attributes.update(result[0])
-            self._attributes = self.rename_keys(self._attributes, "valueof_")
-
-            self._attributes["selected_row"] = self._selected_row
-
-            # Convert to JSON string
-            json_result = json.dumps(
-                result,
-                ensure_ascii=False,
-                indent=4,
-                default=str,
-                cls=DecimalEncoder,
-            )
-
-            self._attributes["json_result"] = json_result
-
-            # for idx, row in enumerate(results):
-            #     self._attributes[f"result_{idx}"] = row
-            self._state = len(result)
+        if data.rows:
+            index = self._selected_row
+            if index >= len(data.rows):
+                _LOGGER.warning(
+                    "Selected row %s is out of range for %s (%s rows); "
+                    "falling back to the first row",
+                    index,
+                    self.entity_id,
+                    len(data.rows),
+                )
+                index = 0
+            attributes.update(rename_keys(data.rows[index], VALUE_PREFIX))
+            attributes[ATTR_SELECTED_ROW] = index
         else:
-            self._attributes["json_result"] = "{}"
-            self._attributes["selected_row"] = -1
-            self._state = 0
+            attributes[ATTR_SELECTED_ROW] = -1
 
-        self._attributes["executed_sql_query"] = self._query
-        self._attributes["query_date"] = self._query_date
-        self._attributes["query_time"] = self._query_time
+        attributes[ATTR_JSON_RESULT] = data.json_result
+        if data.json_truncated:
+            attributes[ATTR_JSON_TRUNCATED] = True
+        attributes[ATTR_EXECUTED_QUERY] = data.query
+        attributes[ATTR_QUERY_DATE] = data.query_date
+        attributes[ATTR_QUERY_TIME] = data.query_time
+        return attributes
+
+    async def async_set_query(self, query: str | None = None) -> None:
+        """Replace the query of this sensor and refresh it immediately.
+
+        Passing no query, or an empty one, restores the configured query.
+        """
+        self.coordinator.query = query or self.coordinator.default_query
+        self._selected_row = 0
+        _LOGGER.debug("New query for %s: %s", self.entity_id, self.coordinator.query)
+        await self.coordinator.async_refresh()
+
+    async def async_select_record(self, rownumber: int) -> None:
+        """Expose the columns of the given row as attributes."""
+        self._selected_row = rownumber
+        _LOGGER.debug("Selected row %s for %s", rownumber, self.entity_id)
+        self.async_write_ha_state()
