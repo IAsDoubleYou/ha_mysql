@@ -76,11 +76,12 @@ Add this repository as a custom repository, following [these directions](https:/
 
 ### Manual
 
-1. Open the directory of your Home Assistant configuration, the one holding `configuration.yaml`.
-2. Create a `custom_components` directory there if it does not exist yet.
-3. Inside `custom_components`, create a directory called `ha_mysql`.
-4. Copy _all_ files from `custom_components/ha_mysql/` of this repository into it.
-5. Restart Home Assistant.
+1. Download `homeassistant-ha_mysql.zip` from the [latest release](https://github.com/IAsDoubleYou/ha_mysql/releases/latest).
+2. Open the directory of your Home Assistant configuration, the one holding `configuration.yaml`.
+3. Create a `custom_components` directory there if it does not exist yet.
+4. Inside `custom_components`, create a directory called `ha_mysql`.
+5. Unpack the zip into it, so `manifest.json` ends up as `custom_components/ha_mysql/manifest.json`.
+6. Restart Home Assistant.
 
 ## Configuration through the user interface
 
