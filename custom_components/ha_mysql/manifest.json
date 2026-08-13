@@ -6,6 +6,7 @@
     "integration_type": "hub",
     "iot_class": "local_polling",
     "issue_tracker": "https://github.com/IAsDoubleYou/ha_mysql/issues",
-    "requirements": ["mysql-connector-python==8.0.28"],
-    "version": "1.0.3"
+    "loggers": ["mysql.connector"],
+    "requirements": ["mysql-connector-python==9.7.0"],
+    "version": "1.1.0"
 }

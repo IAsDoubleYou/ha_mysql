@@ -1,1 +1,26 @@
-# Service ID
+set_query:
+  target:
+    entity:
+      integration: ha_mysql
+      domain: sensor
+  fields:
+    query:
+      required: false
+      example: "SELECT 'Hello Friends' FROM DUAL"
+      selector:
+        text:
+          multiline: true
+
+select_record:
+  target:
+    entity:
+      integration: ha_mysql
+      domain: sensor
+  fields:
+    rownumber:
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 0
+          mode: box
