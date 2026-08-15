@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -13,6 +14,7 @@ import threading
 import time
 from typing import Any
 
+import mysql.connector
 from mysql.connector import errors as mysql_errors
 from mysql.connector.pooling import MySQLConnectionPool, PooledMySQLConnection
 
@@ -38,6 +40,8 @@ from .const import (
     DOMAIN,
     LARGE_RESULT_WARNING_THRESHOLD,
     MAX_QUERY_ATTEMPTS,
+    POOL_ACQUIRE_INTERVAL,
+    POOL_ACQUIRE_TIMEOUT,
     POOL_SIZE,
     RETRY_DELAY,
 )
@@ -177,8 +181,8 @@ class MySQLConnectionManager:
             f"/{self._db_config['database']}"
         )
 
-    def _acquire(self) -> PooledMySQLConnection:
-        """Return a healthy pooled connection, creating the pool if needed."""
+    def _get_pool(self) -> MySQLConnectionPool:
+        """Return the shared pool, creating it on first use."""
         with self._lock:
             if self._pool is None:
                 self._pool = MySQLConnectionPool(
@@ -187,22 +191,58 @@ class MySQLConnectionManager:
                     pool_reset_session=True,
                     **self._db_config,
                 )
-            pool = self._pool
+            return self._pool
 
-        connection = pool.get_connection()
+    def _checkout(self, pool: MySQLConnectionPool) -> PooledMySQLConnection:
+        """Take a connection out of the pool, waiting for one to come free.
+
+        The pool of the driver never blocks: it reports "pool exhausted" as
+        soon as every connection is handed out. Sensors that poll at the same
+        moment would fail on that even though a connection comes free a
+        fraction of a second later, so the wait is polled here.
+        """
+        deadline = time.monotonic() + POOL_ACQUIRE_TIMEOUT
+        while True:
+            try:
+                return pool.get_connection()
+            except mysql_errors.PoolError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(POOL_ACQUIRE_INTERVAL)
+
+    @contextlib.contextmanager
+    def _connection(self, pool: MySQLConnectionPool) -> Iterator[PooledMySQLConnection]:
+        """Yield a pooled connection and always hand it back afterwards.
+
+        Closing a pooled connection does not close the socket, it returns the
+        connection to the pool. That has to happen on every path: after a
+        successful query, after a failed one, and after an unexpected
+        exception. A connection that is not handed back stays checked out for
+        good, and once that has happened POOL_SIZE times every later query
+        runs into "pool exhausted" instead of reaching the database.
+        """
+        connection = self._checkout(pool)
         try:
             # A pooled connection may have been closed by the server after
-            # wait_timeout, so verify it before handing it out.
+            # wait_timeout, so verify it before the query runs.
             connection.ping(reconnect=True, attempts=2, delay=1)
-        except Exception:
+            yield connection
+        finally:
             with contextlib.suppress(Exception):
                 connection.close()
-            raise
-        return connection
 
-    def _invalidate_pool(self) -> None:
-        """Drop the pool so the next query builds fresh connections."""
+    def _invalidate_pool(self, stale: MySQLConnectionPool | None = None) -> None:
+        """Drop the pool so the next query builds fresh connections.
+
+        When a pool is given it is only dropped while it is still the current
+        one. Sensors share the pool and fail together, so without that check
+        the thread that notices the outage second would tear down the pool the
+        first one just rebuilt, and the two would keep replacing each other's
+        connections until the database runs out of them.
+        """
         with self._lock:
+            if stale is not None and stale is not self._pool:
+                return
             pool, self._pool = self._pool, None
         if pool is None:
             return
@@ -216,19 +256,26 @@ class MySQLConnectionManager:
         last_error: Exception | None = None
 
         for attempt in range(1, MAX_QUERY_ATTEMPTS + 1):
-            connection: PooledMySQLConnection | None = None
+            pool: MySQLConnectionPool | None = None
             try:
-                connection = self._acquire()
-                cursor = connection.cursor(buffered=True, dictionary=True)
-                try:
+                pool = self._get_pool()
+                with (
+                    self._connection(pool) as connection,
+                    contextlib.closing(
+                        connection.cursor(buffered=True, dictionary=True)
+                    ) as cursor,
+                ):
                     cursor.execute(query)
                     rows = cursor.fetchall() or []
-                finally:
-                    cursor.close()
             except mysql_errors.PoolError as err:
-                # All connections are in use; back off and try once more.
+                # Every connection is in use and none came free in time. The
+                # pool itself is healthy, so it is kept.
                 last_error = err
-                _LOGGER.debug("Connection pool exhausted (attempt %s)", attempt)
+                _LOGGER.debug(
+                    "No free connection in the pool of %s (attempt %s)",
+                    self.target,
+                    attempt,
+                )
             except _CONNECTION_ERRORS as err:
                 last_error = err
                 _LOGGER.debug(
@@ -237,7 +284,9 @@ class MySQLConnectionManager:
                     attempt,
                     err,
                 )
-                self._invalidate_pool()
+                # The connection was already handed back by _connection, so
+                # the pool can be thrown away without losing one.
+                self._invalidate_pool(pool)
             except mysql_errors.Error as err:
                 # Syntax errors, missing tables, denied privileges: retrying
                 # would only repeat the same failure.
@@ -246,13 +295,16 @@ class MySQLConnectionManager:
                 ) from err
             else:
                 return [_convert_row(row) for row in rows]
-            finally:
-                if connection is not None:
-                    with contextlib.suppress(Exception):
-                        connection.close()
 
             if attempt < MAX_QUERY_ATTEMPTS:
                 time.sleep(RETRY_DELAY)
+
+        if isinstance(last_error, mysql_errors.PoolError):
+            raise MySQLConnectionError(
+                f"All {POOL_SIZE} connections to {self.target} are in use: "
+                f"{last_error}",
+                getattr(last_error, "errno", None),
+            )
 
         raise MySQLConnectionError(
             f"Could not reach MySQL at {self.target}: {last_error}",
@@ -260,15 +312,40 @@ class MySQLConnectionManager:
         )
 
     def test_connection(self) -> None:
-        """Verify the settings by running a trivial query.
+        """Verify the settings on a single connection of its own.
 
         Blocking, run in an executor. Raises MySQLConnectionError when the
         server cannot be reached and MySQLQueryError when it refuses us.
+
+        This deliberately stays away from the pool. The check runs on every
+        setup and on every submitted config flow, while building a pool opens
+        POOL_SIZE connections at once; doing that for one SELECT 1 is what
+        pushed a busy server over its connection limit.
         """
         try:
-            self.execute("SELECT 1")
+            connection = mysql.connector.connect(**self._db_config)
+        except _CONNECTION_ERRORS as err:
+            raise MySQLConnectionError(
+                f"Could not reach MySQL at {self.target}: {err}",
+                getattr(err, "errno", None),
+            ) from err
+        except mysql_errors.Error as err:
+            raise MySQLQueryError(
+                f"Query failed: {err}", getattr(err, "errno", None)
+            ) from err
+
+        try:
+            with contextlib.closing(connection.cursor()) as cursor:
+                cursor.execute("SELECT 1")
+                cursor.fetchall()
+        except mysql_errors.Error as err:
+            raise MySQLQueryError(
+                f"Query failed: {err}", getattr(err, "errno", None)
+            ) from err
         finally:
-            self.close()
+            # This connection is not pooled, so this really does close it.
+            with contextlib.suppress(Exception):
+                connection.close()
 
     def close(self) -> None:
         """Release every pooled connection. Blocking, run in an executor."""
