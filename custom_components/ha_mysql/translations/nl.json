@@ -23,7 +23,7 @@
       "cannot_connect": "De server is niet bereikbaar. Controleer de host, de poort en je firewall.",
       "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
       "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
-      "unknown": "Onverwachte fout. Bekijk het Home Assistant-logboek voor details."
+      "unknown": "Onverwachte fout bij het verbinden: {error}"
     },
     "abort": {
       "already_configured": "Deze database is al ingesteld."
@@ -105,7 +105,7 @@
       "query_failed": "De database weigert de query: {error}",
       "query_no_results": "De query werkt, maar levert geen rijen op. Controleer hem, of verstuur nogmaals om hem toch op te slaan.",
       "cannot_connect": "De database was niet bereikbaar tijdens het testen van de query: {error}",
-      "unknown": "Onverwachte fout tijdens het testen van de query. Bekijk het Home Assistant-logboek voor details."
+      "unknown": "Onverwachte fout bij het testen van de query: {error}"
     },
     "abort": {
       "sensor_not_found": "Die sensor bestaat niet meer."
