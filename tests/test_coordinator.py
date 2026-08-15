@@ -15,8 +15,11 @@ import pytest
 from .conftest import FakePool
 from custom_components.ha_mysql.const import (
     BINARY_PREVIEW_BYTES,
+    CONNECT_TIMEOUT,
     POOL_ACQUIRE_INTERVAL,
     POOL_SIZE,
+    READ_TIMEOUT,
+    WRITE_TIMEOUT,
 )
 from custom_components.ha_mysql.coordinator import (
     MySQLConnectionError,
@@ -384,6 +387,8 @@ def test_test_connection_closes_after_a_refused_query() -> None:
     [
         (mysql_errors.InterfaceError("Can't connect"), MySQLConnectionError),
         (mysql_errors.OperationalError("Too many connections"), MySQLConnectionError),
+        (mysql_errors.ConnectionTimeoutError(errno=2003), MySQLConnectionError),
+        (mysql_errors.ReadTimeoutError(errno=3024), MySQLConnectionError),
         (mysql_errors.ProgrammingError("Access denied", 1045), MySQLQueryError),
     ],
 )
@@ -395,6 +400,78 @@ def test_test_connection_reports_why_it_failed(
 
     with patch(CONNECT, side_effect=failure), pytest.raises(expected):
         manager.test_connection()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        mysql_errors.ConnectionTimeoutError(errno=2003),
+        mysql_errors.ReadTimeoutError(errno=3024),
+        mysql_errors.WriteTimeoutError(errno=3024),
+    ],
+)
+def test_execute_treats_a_timeout_as_a_connection_problem(failure: Exception) -> None:
+    """A driver timeout is a broken connection, not a rejected query.
+
+    These three errors derive straight from Error, so unless they are named
+    they land on the branch for a query the server refused: the entry then
+    fails for good instead of retrying, and the pool keeps handing out
+    connections that will never answer again.
+    """
+    manager = MySQLConnectionManager(DB_CONFIG)
+    pool = FakePool(query_error=failure)
+
+    with (
+        patch(POOL, return_value=pool),
+        patch(SLEEP),
+        pytest.raises(MySQLConnectionError),
+    ):
+        manager.execute("SELECT 1")
+
+    assert pool.in_use == 0
+    # The pool was rebuilt rather than kept, so the dead connections are gone.
+    assert pool.removed is True
+
+
+def test_connections_bound_their_reads_and_writes() -> None:
+    """Every read and write is bounded, not only opening the connection.
+
+    The driver drops the connect timeout once the handshake is done, so
+    without this a read that never gets an answer holds on to its pooled
+    connection for good.
+    """
+    manager = MySQLConnectionManager(DB_CONFIG)
+    pool = FakePool()
+
+    with patch(POOL, return_value=pool) as pool_factory:
+        manager.execute("SELECT 1")
+
+    kwargs = pool_factory.call_args.kwargs
+    assert kwargs["connection_timeout"] == CONNECT_TIMEOUT
+    assert kwargs["read_timeout"] == READ_TIMEOUT
+    assert kwargs["write_timeout"] == WRITE_TIMEOUT
+
+
+def test_connections_use_tls_when_the_server_offers_it() -> None:
+    """TLS is used when it is available, without demanding a certificate.
+
+    A database on a home network nearly always has a self signed certificate,
+    so verifying it would lock out every existing setup. The settings are
+    spelled out so upgrading the driver cannot quietly change them.
+    """
+    manager = MySQLConnectionManager(DB_CONFIG)
+    pool = FakePool()
+
+    with patch(POOL, return_value=pool) as pool_factory:
+        manager.execute("SELECT 1")
+
+    with patch(CONNECT) as connect:
+        manager.test_connection()
+
+    for kwargs in (pool_factory.call_args.kwargs, connect.call_args.kwargs):
+        assert kwargs["ssl_disabled"] is False
+        assert kwargs["ssl_verify_cert"] is False
+        assert kwargs["ssl_verify_identity"] is False
 
 
 def test_execute_survives_a_pool_that_cannot_be_built() -> None:

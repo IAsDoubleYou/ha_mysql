@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import threading
+from typing import Any
+from unittest.mock import patch
+
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -10,6 +14,7 @@ from .conftest import (
     CONFIG,
     CONNECTION,
     ENTITY_ID,
+    ROWS,
     UNIQUE_ID,
     make_entry,
     make_sensor,
@@ -228,3 +233,38 @@ async def test_sensor_platform_without_component_config(
     await hass.async_block_till_done()
 
     assert hass.states.get(ENTITY_ID) is None
+
+
+async def test_database_calls_run_in_the_executor(hass: HomeAssistant) -> None:
+    """None of the blocking driver calls run on the event loop.
+
+    The driver blocks for as long as the database takes to answer, and with a
+    read timeout of half a minute that is long enough to freeze the whole of
+    Home Assistant if it happens on the loop.
+    """
+    manager = "custom_components.ha_mysql.coordinator.MySQLConnectionManager"
+    loop_thread = threading.get_ident()
+    threads: dict[str, int] = {}
+
+    def record(name: str, result: Any = None):
+        """Return a stand-in that notes which thread it ran on."""
+
+        def call(self: Any, *args: Any) -> Any:
+            threads[name] = threading.get_ident()
+            return result
+
+        return call
+
+    with (
+        patch(f"{manager}.test_connection", autospec=True, side_effect=record("test")),
+        patch(f"{manager}.execute", autospec=True, side_effect=record("execute", ROWS)),
+        patch(f"{manager}.close", autospec=True, side_effect=record("close")),
+    ):
+        entry = make_entry()
+        await setup_entry(hass, entry)
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Setting up, polling and unloading all reached the database.
+    assert set(threads) == {"test", "execute", "close"}
+    assert loop_thread not in threads.values()

@@ -57,8 +57,16 @@ async def test_user_flow(hass: HomeAssistant, mock_execute) -> None:
 
 
 async def test_user_flow_cannot_connect(hass: HomeAssistant, mock_execute) -> None:
-    """An unreachable server is reported on the form."""
-    mock_execute.side_effect = MySQLConnectionError("no route")
+    """An unreachable server is reported on the form, with the reason.
+
+    A refused connection, a timeout and a failed TLS handshake all end up
+    here and each needs a different fix, so the driver message is shown
+    instead of only the generic advice about the host and the firewall.
+    """
+    mock_execute.side_effect = MySQLConnectionError(
+        "Could not reach MySQL at db.local:3306/testdb: "
+        "2003 (HY000): Can't connect to MySQL server"
+    )
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -69,6 +77,7 @@ async def test_user_flow_cannot_connect(hass: HomeAssistant, mock_execute) -> No
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
+    assert "2003" in result["description_placeholders"]["error"]
 
 
 async def test_user_flow_invalid_auth(hass: HomeAssistant, mock_execute) -> None:

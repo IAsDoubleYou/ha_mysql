@@ -234,8 +234,11 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
                 return "unknown_database", ""
             _LOGGER.debug("Unexpected database error while validating: %s", err)
             return "unknown", _error_detail(err)
-        except MySQLConnectionError:
-            return "cannot_connect", ""
+        except MySQLConnectionError as err:
+            # A refused connection, a timeout and a failed TLS handshake all
+            # end up here, and they need very different fixes, so the reason
+            # from the driver is shown instead of only the generic advice.
+            return "cannot_connect", _error_detail(err)
         except Exception as err:
             _LOGGER.exception("Unexpected error while validating the connection")
             return "unknown", _error_detail(err)

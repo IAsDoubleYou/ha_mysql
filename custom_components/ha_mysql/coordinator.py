@@ -43,7 +43,9 @@ from .const import (
     POOL_ACQUIRE_INTERVAL,
     POOL_ACQUIRE_TIMEOUT,
     POOL_SIZE,
+    READ_TIMEOUT,
     RETRY_DELAY,
+    WRITE_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,11 +54,20 @@ _LOGGER = logging.getLogger(__name__)
 # character set, so they are generated instead of derived from user input.
 _POOL_COUNTER = itertools.count(1)
 
-# Errors that indicate a broken or exhausted connection rather than a bad
+# Errors that indicate a broken or timed out connection rather than a bad
 # query. Only these are worth retrying.
+#
+# The three timeout errors derive straight from Error instead of from
+# InterfaceError or OperationalError, so they have to be named one by one.
+# Without them a network timeout counts as a query the server rejected, which
+# fails the config entry for good instead of retrying it, and leaves the pool
+# holding connections that will never answer again.
 _CONNECTION_ERRORS = (
     mysql_errors.InterfaceError,
     mysql_errors.OperationalError,
+    mysql_errors.ConnectionTimeoutError,
+    mysql_errors.ReadTimeoutError,
+    mysql_errors.WriteTimeoutError,
 )
 
 
@@ -166,6 +177,18 @@ class MySQLConnectionManager:
             "password": config[CONF_MYSQL_PASSWORD],
             "database": config[CONF_MYSQL_DATABASE],
             "connection_timeout": CONNECT_TIMEOUT,
+            # The connect timeout only covers opening the connection and the
+            # handshake. See READ_TIMEOUT for why the rest needs bounding too.
+            "read_timeout": READ_TIMEOUT,
+            "write_timeout": WRITE_TIMEOUT,
+            # TLS is used when the server offers it and skipped when it does
+            # not, and the certificate is not checked: a database on a home
+            # network nearly always has a self signed one, and refusing that
+            # would lock out every existing setup. Spelled out instead of left
+            # to the driver, so upgrading it cannot quietly change any of this.
+            "ssl_disabled": False,
+            "ssl_verify_cert": False,
+            "ssl_verify_identity": False,
             # Without autocommit a pooled connection keeps an open transaction,
             # which makes InnoDB return the same snapshot on every poll.
             "autocommit": True,

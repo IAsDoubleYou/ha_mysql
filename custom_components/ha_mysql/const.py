@@ -55,6 +55,14 @@ BINARY_PREVIEW_BYTES: Final = 32
 
 # Connection handling.
 CONNECT_TIMEOUT: Final = 10
+# The driver clears the connect timeout as soon as the handshake is done, which
+# leaves every later read and write on a socket that blocks forever. A query
+# that stops getting answers, because the route dropped or a firewall forgot
+# about the connection, would then hold on to its thread and its pooled
+# connection for good: the one leak that no try/finally can close. These bound
+# every read and write after connecting, so such a query gives up instead.
+READ_TIMEOUT: Final = 30
+WRITE_TIMEOUT: Final = 30
 # Number of connections shared by every sensor of one config entry. The driver
 # opens all of them when the pool is built and refuses anything above 32.
 POOL_SIZE: Final = 10
