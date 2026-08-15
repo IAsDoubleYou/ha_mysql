@@ -55,9 +55,17 @@ BINARY_PREVIEW_BYTES: Final = 32
 
 # Connection handling.
 CONNECT_TIMEOUT: Final = 10
-POOL_SIZE: Final = 5
+# Number of connections shared by every sensor of one config entry. The driver
+# opens all of them when the pool is built and refuses anything above 32.
+POOL_SIZE: Final = 10
 MAX_QUERY_ATTEMPTS: Final = 2
 RETRY_DELAY: Final = 1.0
+# The pool of the driver has no blocking get: it reports "pool exhausted" the
+# moment every connection is in use. Sensors that happen to poll at the same
+# second would fail on that, so the wait for a free connection is polled here
+# until POOL_ACQUIRE_TIMEOUT seconds have passed.
+POOL_ACQUIRE_TIMEOUT: Final = 5.0
+POOL_ACQUIRE_INTERVAL: Final = 0.1
 
 # Services.
 SERVICE_SET_QUERY: Final = "set_query"
