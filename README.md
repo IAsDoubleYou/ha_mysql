@@ -7,6 +7,22 @@
 [![Tests][tests_shield]][tests]
 [![Community Forum][community_forum_shield]][community_forum]
 
+> **Questions, ideas or want to show what you built?** Join the conversation in [GitHub Discussions](https://github.com/IAsDoubleYou/ha_mysql/discussions).
+
+### HA MySQL or MySQL Query?
+
+Two integrations, two different jobs. They can be installed side by side.
+
+| | **HA MySQL** (this repository) | **[MySQL Query](https://github.com/IAsDoubleYou/mysql_query)** |
+|---|---|---|
+| Approach | Automatic sensors | Actions (services) for scripts and automations |
+| Runs a query | On its own interval, per sensor | Only when you call the action |
+| Result ends up in | The state and the attributes of a sensor | The response of the action, and optionally in an event |
+| Creates entities | Yes, one sensor per query | No |
+| History and statistics | Yes, through the sensor | No |
+| Writing to the database | No, `SELECT` only | Yes, `INSERT`, `UPDATE` and `DELETE` as well |
+| Best for | Values you want to follow continuously, dashboards, the energy dashboard | Lookups on demand, queries with runtime parameters, changing data |
+
 Home Assistant custom integration that turns the result of a MySQL or MariaDB query into a sensor.
 
 Every sensor runs its own query on its own interval. The result is available in three ways:
@@ -16,8 +32,6 @@ Every sensor runs its own query on its own interval. The result is available in 
 * the complete result set as JSON in the **`json_result` attribute**.
 
 Queries can be replaced at runtime with the [`ha_mysql.set_query`](#ha_mysqlset_query) action, which makes it possible to build queries that depend on information only known at runtime.
-
-> Looking for a service instead of a sensor? See [MySQL Query](https://github.com/IAsDoubleYou/homeassistant-mysql_query).
 
 ## What is the state of the sensor?
 
