@@ -213,6 +213,185 @@ async def test_options_accepts_valid_template(
     assert entry.options["sensors"][0]["value_template"] == "{{ row.name }}"
 
 
+async def test_options_add_sensor_invalid_query(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A query the database refuses is reported with its own message."""
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.side_effect = MySQLQueryError(
+        "Query failed: 1146 (42S02): Table 'testdb.dept' doesn't exist", 1146
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], NEW_SENSOR
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"query": "query_failed"}
+    assert result["description_placeholders"]["error"] == (
+        "1146 (42S02): Table 'testdb.dept' doesn't exist"
+    )
+    assert entry.options["sensors"] == []
+
+
+async def test_options_add_sensor_query_recovers(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """The corrected query is saved on the next attempt."""
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.side_effect = MySQLQueryError("Query failed: syntax error", 1064)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], NEW_SENSOR
+    )
+    assert result["errors"] == {"query": "query_failed"}
+
+    mock_execute.side_effect = None
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], NEW_SENSOR
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["sensors"][0]["query"] == "SELECT * FROM dept"
+
+
+async def test_options_add_sensor_cannot_connect(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """An unreachable database is reported under the form, not on the query."""
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.side_effect = MySQLConnectionError("Could not reach MySQL: no route")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], NEW_SENSOR
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
+    assert entry.options["sensors"] == []
+
+
+async def test_options_add_sensor_unexpected_error(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Anything else is reported as an unknown error."""
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.side_effect = RuntimeError("boom")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], NEW_SENSOR
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "unknown"}
+    assert entry.options["sensors"] == []
+
+
+async def test_options_add_sensor_empty_query(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A blank query is refused without asking the database."""
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.reset_mock()
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**NEW_SENSOR, "query": "   "}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"query": "query_empty"}
+    assert mock_execute.call_count == 0
+    assert entry.options["sensors"] == []
+
+
+async def test_options_add_sensor_without_rows(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """An empty result set warns once and is saved on the second attempt."""
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.return_value = []
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], NEW_SENSOR
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"query": "query_no_results"}
+    assert entry.options["sensors"] == []
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], NEW_SENSOR
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["sensors"][0]["name"] == "Departments"
+
+
+async def test_options_add_sensor_warns_again_after_change(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Changing the query after the warning asks for confirmation again."""
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.return_value = []
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], NEW_SENSOR
+    )
+    assert result["errors"] == {"query": "query_no_results"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**NEW_SENSOR, "query": "SELECT * FROM other"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"query": "query_no_results"}
+    assert entry.options["sensors"] == []
+
+
 async def test_options_edit_sensor(hass: HomeAssistant, mock_execute) -> None:
     """Editing a sensor keeps its unique ID."""
     entry = make_entry()
@@ -242,6 +421,75 @@ async def test_options_edit_sensor(hass: HomeAssistant, mock_execute) -> None:
     assert sensor["query"] == "SELECT * FROM emp WHERE active = 1"
     assert sensor["scan_interval"] == 120
     assert sensor["unique_id"] == "ha_mysql_employees"
+
+
+async def test_options_edit_sensor_invalid_query(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A broken query keeps the stored sensor as it was."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "select_sensor"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"unique_id": "ha_mysql_employees"}
+    )
+
+    mock_execute.side_effect = MySQLQueryError(
+        "Query failed: 1054 (42S22): Unknown column 'activ' in 'where clause'", 1054
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "name": "Employees",
+            "query": "SELECT * FROM emp WHERE activ = 1",
+            "scan_interval": 120,
+            "max_json_rows": 0,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "edit_sensor"
+    assert result["errors"] == {"query": "query_failed"}
+    assert result["description_placeholders"]["error"] == (
+        "1054 (42S22): Unknown column 'activ' in 'where clause'"
+    )
+    assert entry.options["sensors"][0]["query"] == "SELECT * FROM emp"
+    assert entry.options["sensors"][0]["scan_interval"] == 30
+
+
+async def test_options_edit_sensor_keeps_empty_query(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Editing something else does not warn about the stored empty query."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "select_sensor"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"unique_id": "ha_mysql_employees"}
+    )
+
+    mock_execute.return_value = []
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "name": "Employees",
+            "query": "SELECT * FROM emp",
+            "scan_interval": 120,
+            "max_json_rows": 0,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["sensors"][0]["scan_interval"] == 120
 
 
 async def test_options_remove_sensor(hass: HomeAssistant, mock_execute) -> None:
