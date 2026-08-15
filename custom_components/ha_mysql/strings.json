@@ -20,7 +20,7 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not reach the server. Check the host, the port and your firewall.",
+      "cannot_connect": "Could not reach the server. Check the host, the port and your firewall. Details: {error}",
       "invalid_auth": "The server refused the username or password.",
       "unknown_database": "The database does not exist, or this user has no access to it.",
       "unknown": "Unexpected error while connecting: {error}"

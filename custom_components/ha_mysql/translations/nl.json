@@ -20,7 +20,7 @@
       }
     },
     "error": {
-      "cannot_connect": "De server is niet bereikbaar. Controleer de host, de poort en je firewall.",
+      "cannot_connect": "De server is niet bereikbaar. Controleer de host, de poort en je firewall. Details: {error}",
       "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
       "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
       "unknown": "Onverwachte fout bij het verbinden: {error}"
