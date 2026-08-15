@@ -55,7 +55,7 @@
           "max_json_rows": "Maximum rows in json_result"
         },
         "data_description": {
-          "query": "The SQL query to run, for example SELECT * FROM emp.",
+          "query": "The SQL query to run, for example SELECT * FROM emp. It is tested against the database before it is saved.",
           "value_column": "Column of the selected row to use as the state.",
           "value_template": "Template that returns the state. Takes precedence over the value column. The variables row, rows and row_count are available.",
           "state_class": "Needed for long term statistics. The value has to be numeric.",
@@ -84,7 +84,7 @@
           "max_json_rows": "Maximum rows in json_result"
         },
         "data_description": {
-          "query": "The SQL query to run, for example SELECT * FROM emp.",
+          "query": "The SQL query to run, for example SELECT * FROM emp. It is tested against the database before it is saved.",
           "value_column": "Column of the selected row to use as the state.",
           "value_template": "Template that returns the state. Takes precedence over the value column. The variables row, rows and row_count are available.",
           "state_class": "Needed for long term statistics. The value has to be numeric.",
@@ -100,7 +100,12 @@
       }
     },
     "error": {
-      "name_exists": "A sensor with this name already exists."
+      "name_exists": "A sensor with this name already exists.",
+      "query_empty": "Fill in an SQL query.",
+      "query_failed": "The database refused the query: {error}",
+      "query_no_results": "The query works but returned no rows. Check it, or submit it again to save it anyway.",
+      "cannot_connect": "Could not reach the database while testing the query: {error}",
+      "unknown": "Unexpected error while testing the query. Check the Home Assistant log for details."
     },
     "abort": {
       "sensor_not_found": "That sensor no longer exists."

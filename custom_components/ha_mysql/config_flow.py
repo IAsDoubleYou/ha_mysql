@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from typing import Any
 from uuid import uuid4
@@ -65,6 +66,14 @@ _LOGGER = logging.getLogger(__name__)
 _ERRNO_ACCESS_DENIED = 1045
 _ERRNO_DATABASE_ACCESS_DENIED = 1044
 _ERRNO_UNKNOWN_DATABASE = 1049
+
+# Database errors are shown on the form itself, so they are cut off before they
+# push the rest of the dialog out of view.
+_MAX_ERROR_LENGTH = 255
+
+# Errors that say something about the connection instead of the query, and
+# therefore belong under the form as a whole.
+_BASE_ERRORS = ("cannot_connect", "unknown")
 
 CONNECTION_SCHEMA = vol.Schema(
     {
@@ -174,6 +183,25 @@ def _clean_sensor_input(user_input: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+@dataclass(frozen=True)
+class _QueryCheck:
+    """Outcome of a test run of a sensor query."""
+
+    error: str | None = None
+    message: str = ""
+    row_count: int = 0
+
+
+def _error_detail(err: Exception) -> str:
+    """Return the database message in a form that fits on the dialog."""
+    # The coordinator prefixes its own errors; the driver message is what the
+    # user needs to see.
+    message = str(err).removeprefix("Query failed: ").strip()
+    if len(message) > _MAX_ERROR_LENGTH:
+        message = f"{message[:_MAX_ERROR_LENGTH]}..."
+    return message
+
+
 class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the setup of a MySQL connection."""
 
@@ -279,6 +307,8 @@ class HAMySQLOptionsFlow(OptionsFlow):
     def __init__(self) -> None:
         """Start without a selected sensor."""
         self._selected: str | None = None
+        # Query that the user already saw the "no rows" warning for.
+        self._empty_ack: str | None = None
 
     @property
     def _sensors(self) -> list[dict[str, Any]]:
@@ -290,6 +320,55 @@ class HAMySQLOptionsFlow(OptionsFlow):
     def _save(self, sensors: list[dict[str, Any]]) -> ConfigFlowResult:
         """Store the new sensor list."""
         return self.async_create_entry(data={CONF_SENSORS: sensors})
+
+    async def _async_run_query(self, query: str) -> _QueryCheck:
+        """Run the query once against the configured database.
+
+        The manager of a loaded entry is reused, so testing a query does not
+        open connections beyond the pool the sensors already share.
+        """
+        manager = getattr(self.config_entry, "runtime_data", None)
+        borrowed = isinstance(manager, MySQLConnectionManager)
+        if not borrowed:
+            manager = MySQLConnectionManager(dict(self.config_entry.data))
+
+        try:
+            rows = await self.hass.async_add_executor_job(manager.execute, query)
+        except MySQLQueryError as err:
+            _LOGGER.debug("Test run of %s failed: %s", query, err)
+            return _QueryCheck(error="query_failed", message=_error_detail(err))
+        except MySQLConnectionError as err:
+            return _QueryCheck(error="cannot_connect", message=_error_detail(err))
+        except Exception:
+            _LOGGER.exception("Unexpected error while testing the query")
+            return _QueryCheck(error="unknown")
+        finally:
+            if not borrowed:
+                await self.hass.async_add_executor_job(manager.close)
+
+        return _QueryCheck(row_count=len(rows))
+
+    async def _async_check_query(self, query: str) -> tuple[dict[str, str], str]:
+        """Validate a submitted query.
+
+        Returns the errors to show on the form, and the database message that
+        goes with them.
+        """
+        if not query:
+            return {CONF_QUERY: "query_empty"}, ""
+
+        check = await self._async_run_query(query)
+        if check.error is not None:
+            field = "base" if check.error in _BASE_ERRORS else CONF_QUERY
+            return {field: check.error}, check.message
+
+        if check.row_count == 0 and self._empty_ack != query:
+            # A query that returns nothing today can return rows tomorrow, so
+            # this only warns: submitting the same query again saves it.
+            self._empty_ack = query
+            return {CONF_QUERY: "query_no_results"}, ""
+
+        return {}, ""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -305,6 +384,7 @@ class HAMySQLOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Add a new sensor to this connection."""
         errors: dict[str, str] = {}
+        detail = ""
 
         if user_input is not None:
             sensors = self._sensors
@@ -312,14 +392,17 @@ class HAMySQLOptionsFlow(OptionsFlow):
             if any(sensor[CONF_NAME] == cleaned[CONF_NAME] for sensor in sensors):
                 errors[CONF_NAME] = "name_exists"
             else:
-                cleaned[CONF_UNIQUE_ID] = uuid4().hex
-                sensors.append(cleaned)
-                return self._save(sensors)
+                errors, detail = await self._async_check_query(cleaned[CONF_QUERY])
+                if not errors:
+                    cleaned[CONF_UNIQUE_ID] = uuid4().hex
+                    sensors.append(cleaned)
+                    return self._save(sensors)
 
         return self.async_show_form(
             step_id="add_sensor",
             data_schema=_sensor_schema(user_input),
             errors=errors,
+            description_placeholders={"error": detail},
         )
 
     async def async_step_select_sensor(
@@ -367,8 +450,13 @@ class HAMySQLOptionsFlow(OptionsFlow):
             return self.async_abort(reason="sensor_not_found")
 
         errors: dict[str, str] = {}
+        detail = ""
 
-        if user_input is not None:
+        if user_input is None:
+            # The stored query was accepted before, so an edit that leaves it
+            # alone is not held up by the "no rows" warning.
+            self._empty_ack = sensors[index][CONF_QUERY]
+        else:
             cleaned = _clean_sensor_input(user_input)
             if any(
                 sensor[CONF_NAME] == cleaned[CONF_NAME]
@@ -377,18 +465,24 @@ class HAMySQLOptionsFlow(OptionsFlow):
             ):
                 errors[CONF_NAME] = "name_exists"
             else:
-                # The unique ID stays untouched so the entity keeps its history.
-                cleaned[CONF_UNIQUE_ID] = sensors[index][CONF_UNIQUE_ID]
-                if (source := sensors[index].get(CONF_SOURCE)) is not None:
-                    cleaned[CONF_SOURCE] = source
-                sensors[index] = cleaned
-                return self._save(sensors)
+                errors, detail = await self._async_check_query(cleaned[CONF_QUERY])
+                if not errors:
+                    # The unique ID stays untouched so the entity keeps its
+                    # history.
+                    cleaned[CONF_UNIQUE_ID] = sensors[index][CONF_UNIQUE_ID]
+                    if (source := sensors[index].get(CONF_SOURCE)) is not None:
+                        cleaned[CONF_SOURCE] = source
+                    sensors[index] = cleaned
+                    return self._save(sensors)
 
         return self.async_show_form(
             step_id="edit_sensor",
             data_schema=_sensor_schema(user_input or sensors[index]),
             errors=errors,
-            description_placeholders={"name": sensors[index][CONF_NAME]},
+            description_placeholders={
+                "name": sensors[index][CONF_NAME],
+                "error": detail,
+            },
         )
 
     async def async_step_remove_sensor(

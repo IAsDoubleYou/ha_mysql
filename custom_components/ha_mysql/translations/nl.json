@@ -55,7 +55,7 @@
           "max_json_rows": "Maximum aantal rijen in json_result"
         },
         "data_description": {
-          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp.",
+          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp. Hij wordt voor het opslaan getest op de database.",
           "value_column": "Kolom van de geselecteerde rij die als status wordt gebruikt.",
           "value_template": "Template die de status oplevert. Gaat voor op de waardekolom. De variabelen row, rows en row_count zijn beschikbaar.",
           "state_class": "Nodig voor langetermijnstatistieken. De waarde moet numeriek zijn.",
@@ -84,7 +84,7 @@
           "max_json_rows": "Maximum aantal rijen in json_result"
         },
         "data_description": {
-          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp.",
+          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp. Hij wordt voor het opslaan getest op de database.",
           "value_column": "Kolom van de geselecteerde rij die als status wordt gebruikt.",
           "value_template": "Template die de status oplevert. Gaat voor op de waardekolom. De variabelen row, rows en row_count zijn beschikbaar.",
           "state_class": "Nodig voor langetermijnstatistieken. De waarde moet numeriek zijn.",
@@ -100,7 +100,12 @@
       }
     },
     "error": {
-      "name_exists": "Er bestaat al een sensor met deze naam."
+      "name_exists": "Er bestaat al een sensor met deze naam.",
+      "query_empty": "Vul een SQL-query in.",
+      "query_failed": "De database weigert de query: {error}",
+      "query_no_results": "De query werkt, maar levert geen rijen op. Controleer hem, of verstuur nogmaals om hem toch op te slaan.",
+      "cannot_connect": "De database was niet bereikbaar tijdens het testen van de query: {error}",
+      "unknown": "Onverwachte fout tijdens het testen van de query. Bekijk het Home Assistant-logboek voor details."
     },
     "abort": {
       "sensor_not_found": "Die sensor bestaat niet meer."
