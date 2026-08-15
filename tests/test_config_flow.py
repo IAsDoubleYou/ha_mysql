@@ -92,6 +92,78 @@ async def test_user_flow_unknown_database(hass: HomeAssistant, mock_execute) -> 
     assert result["errors"] == {"base": "unknown_database"}
 
 
+async def test_user_flow_unexpected_error(hass: HomeAssistant, mock_execute) -> None:
+    """An unexpected error shows what actually went wrong."""
+    mock_execute.side_effect = RuntimeError("the driver exploded")
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "unknown"}
+    assert result["description_placeholders"]["error"] == "the driver exploded"
+
+
+async def test_user_flow_unexpected_database_error(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A database error without its own message keeps the driver text."""
+    mock_execute.side_effect = MySQLQueryError(
+        "Query failed: 1142 (42000): SELECT command denied to user", 1142
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "unknown"}
+    assert result["description_placeholders"]["error"] == (
+        "1142 (42000): SELECT command denied to user"
+    )
+
+
+async def test_user_flow_long_error_is_shortened(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A very long message is cut off so the dialog stays readable."""
+    mock_execute.side_effect = RuntimeError("x" * 400)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+    detail = result["description_placeholders"]["error"]
+    assert detail == f"{'x' * 255}..."
+
+
+async def test_user_flow_error_without_message(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """An error that carries no text falls back to its type."""
+    mock_execute.side_effect = TimeoutError
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+    assert result["errors"] == {"base": "unknown"}
+    assert result["description_placeholders"]["error"] == "TimeoutError"
+
+
 async def test_user_flow_recovers_after_error(
     hass: HomeAssistant, mock_execute
 ) -> None:
@@ -309,6 +381,7 @@ async def test_options_add_sensor_unexpected_error(
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "unknown"}
+    assert result["description_placeholders"]["error"] == "boom"
     assert entry.options["sensors"] == []
 
 

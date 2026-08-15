@@ -23,7 +23,7 @@
       "cannot_connect": "Could not reach the server. Check the host, the port and your firewall.",
       "invalid_auth": "The server refused the username or password.",
       "unknown_database": "The database does not exist, or this user has no access to it.",
-      "unknown": "Unexpected error. Check the Home Assistant log for details."
+      "unknown": "Unexpected error while connecting: {error}"
     },
     "abort": {
       "already_configured": "This database is already set up."
@@ -105,7 +105,7 @@
       "query_failed": "The database refused the query: {error}",
       "query_no_results": "The query works but returned no rows. Check it, or submit it again to save it anyway.",
       "cannot_connect": "Could not reach the database while testing the query: {error}",
-      "unknown": "Unexpected error while testing the query. Check the Home Assistant log for details."
+      "unknown": "Unexpected error while testing the query: {error}"
     },
     "abort": {
       "sensor_not_found": "That sensor no longer exists."

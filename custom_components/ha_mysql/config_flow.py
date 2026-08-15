@@ -193,10 +193,13 @@ class _QueryCheck:
 
 
 def _error_detail(err: Exception) -> str:
-    """Return the database message in a form that fits on the dialog."""
+    """Return the message of an error in a form that fits on the dialog."""
     # The coordinator prefixes its own errors; the driver message is what the
     # user needs to see.
     message = str(err).removeprefix("Query failed: ").strip()
+    # Some exceptions carry no message at all; the type is better than nothing.
+    if not message:
+        return type(err).__name__
     if len(message) > _MAX_ERROR_LENGTH:
         message = f"{message[:_MAX_ERROR_LENGTH]}..."
     return message
@@ -213,30 +216,37 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
         """Return the options flow that manages the sensors."""
         return HAMySQLOptionsFlow()
 
-    async def _async_validate(self, connection: dict[str, Any]) -> str | None:
-        """Try the connection and return an error key when it fails."""
+    async def _async_validate(
+        self, connection: dict[str, Any]
+    ) -> tuple[str | None, str]:
+        """Try the connection.
+
+        Returns the error key to show on the form, and the message that goes
+        with it. Causes that speak for themselves come without a message.
+        """
         manager = MySQLConnectionManager(connection)
         try:
             await self.hass.async_add_executor_job(manager.test_connection)
         except MySQLQueryError as err:
             if err.errno == _ERRNO_ACCESS_DENIED:
-                return "invalid_auth"
+                return "invalid_auth", ""
             if err.errno in (_ERRNO_DATABASE_ACCESS_DENIED, _ERRNO_UNKNOWN_DATABASE):
-                return "unknown_database"
+                return "unknown_database", ""
             _LOGGER.debug("Unexpected database error while validating: %s", err)
-            return "unknown"
+            return "unknown", _error_detail(err)
         except MySQLConnectionError:
-            return "cannot_connect"
-        except Exception:
+            return "cannot_connect", ""
+        except Exception as err:
             _LOGGER.exception("Unexpected error while validating the connection")
-            return "unknown"
-        return None
+            return "unknown", _error_detail(err)
+        return None, ""
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Ask for the database connection settings."""
         errors: dict[str, str] = {}
+        detail = ""
 
         if user_input is not None:
             connection = {
@@ -250,7 +260,8 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(_connection_id(connection))
             self._abort_if_unique_id_configured()
 
-            if (error := await self._async_validate(connection)) is None:
+            error, detail = await self._async_validate(connection)
+            if error is None:
                 return self.async_create_entry(
                     title=_entry_title(connection),
                     data=connection,
@@ -264,6 +275,7 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONNECTION_SCHEMA, user_input or {}
             ),
             errors=errors,
+            description_placeholders={"error": detail},
         )
 
     async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
@@ -339,9 +351,9 @@ class HAMySQLOptionsFlow(OptionsFlow):
             return _QueryCheck(error="query_failed", message=_error_detail(err))
         except MySQLConnectionError as err:
             return _QueryCheck(error="cannot_connect", message=_error_detail(err))
-        except Exception:
+        except Exception as err:
             _LOGGER.exception("Unexpected error while testing the query")
-            return _QueryCheck(error="unknown")
+            return _QueryCheck(error="unknown", message=_error_detail(err))
         finally:
             if not borrowed:
                 await self.hass.async_add_executor_job(manager.close)
