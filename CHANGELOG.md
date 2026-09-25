@@ -23,6 +23,16 @@ without removing and re-adding the integration.
   value can no longer change what the statement does. Templates in `values`
   are rendered with their native type, so a number or a boolean is bound as
   such instead of as text.
+- Brand images shipped with the integration, in
+  `custom_components/ha_mysql/brand/`: `icon.png` (256x256), `icon@2x.png`
+  (512x512), `logo.png` (256x64) and `logo@2x.png` (512x128). Home Assistant
+  2026.3.0 and later read these directly and give them priority over the
+  brands CDN, so the integration now shows its own icon and logo in the UI.
+  Older Home Assistant versions ignore the folder and are unaffected.
+- `scripts/build_brands.py`, which generates those images from the raw
+  artwork. It keys out the background with a flood fill from the image
+  border, so dark elements inside the artwork are preserved, and typesets
+  the wordmark.
 
 ### Changed
 
