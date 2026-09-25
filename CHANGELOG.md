@@ -5,6 +5,40 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-23
+
+This release closes a SQL injection gap in `ha_mysql.set_query`, and makes it
+possible to change a connection's host, port, username, password and database
+without removing and re-adding the integration.
+
+### Added
+
+- **Configure → Change the database connection**, to edit the host, port,
+  username, password and database of an existing connection from the
+  integration card. The new connection is tested before it replaces the old
+  one; the sensors are left untouched.
+- `values` on `ha_mysql.set_query`, to bind values to `%s` placeholders in the
+  query separately from its text. The driver quotes and escapes each value
+  according to its type, so a quote, a semicolon or a stray backslash in the
+  value can no longer change what the statement does. Templates in `values`
+  are rendered with their native type, so a number or a boolean is bound as
+  such instead of as text.
+
+### Changed
+
+- Only a single, read-only statement is now accepted everywhere a query
+  enters the integration: the user interface, `configuration.yaml` and
+  `ha_mysql.set_query`. A query with more than one statement, or one that is
+  not `SELECT`-style, is refused before it ever reaches the database.
+  Previously, testing a sensor query when adding or editing it would run a
+  write for real if the query happened to contain one.
+- A newly added sensor's entity ID and friendly name now include the
+  connection's device name, for example
+  `sensor.mydatabase_192_168_1_10_employees` and "mydatabase @ 192.168.1.10
+  Employees", the same way Home Assistant names every other entity that
+  belongs to a device. Sensors that already existed keep the entity ID and
+  history they already had; this only applies to sensors added from now on.
+
 ## [1.2.0] - 2026-08-15
 
 This release is about connections that stop answering. Sensors of one
@@ -136,5 +170,6 @@ keep the entity IDs and the history they already had.
 See the [releases page](https://github.com/IAsDoubleYou/ha_mysql/releases) for
 the notes of 1.0.3 and older.
 
+[1.3.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.3.0
 [1.2.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.2.0
 [1.1.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.1.0
