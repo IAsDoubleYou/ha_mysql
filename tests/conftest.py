@@ -42,7 +42,11 @@ CONNECTION = {
 }
 
 UNIQUE_ID = "db.local:3306/testdb"
-ENTITY_ID = "sensor.employees"
+# Every sensor sits under a device named after the connection, so a newly
+# registered entity ID combines the two: "testdb @ db.local" + "Employees".
+# An entity that already existed under the old, bare ID keeps it; this is
+# only what a fresh registration gets.
+ENTITY_ID = "sensor.testdb_db_local_employees"
 
 SENSOR: dict[str, Any] = {
     "name": "Employees",

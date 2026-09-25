@@ -115,10 +115,31 @@ def test_execute_returns_rows() -> None:
     ):
         assert manager.execute("SELECT 1") == [{"a": "1.5"}]
 
-    cursor.execute.assert_called_once_with("SELECT 1")
+    cursor.execute.assert_called_once_with("SELECT 1", None)
     cursor.close.assert_called_once()
     # The connection is handed back to the pool.
     connection.close.assert_called_once()
+
+
+def test_execute_binds_params() -> None:
+    """Values passed as params are handed to the driver, not the query text.
+
+    This is what keeps a bound value from being able to change what the
+    statement does: the driver quotes and escapes it instead of it becoming
+    part of the SQL.
+    """
+    manager = MySQLConnectionManager(DB_CONFIG)
+    pool, _, cursor = _pool_returning([])
+
+    with patch(
+        "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
+        return_value=pool,
+    ):
+        manager.execute("SELECT * FROM emp WHERE id = %s", ("1; DROP TABLE emp",))
+
+    cursor.execute.assert_called_once_with(
+        "SELECT * FROM emp WHERE id = %s", ("1; DROP TABLE emp",)
+    )
 
 
 def test_execute_pings_before_use() -> None:

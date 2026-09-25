@@ -22,7 +22,7 @@ from homeassistant.const import (
     MAX_LENGTH_STATE_STATE,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import TemplateError
+from homeassistant.exceptions import ServiceValidationError, TemplateError
 from homeassistant.helpers import (
     config_validation as cv,
     entity_platform,
@@ -43,6 +43,7 @@ from .const import (
     ATTR_QUERY_TIME,
     ATTR_ROW_COUNT,
     ATTR_SELECTED_ROW,
+    ATTR_VALUES,
     CONF_MYSQL_DATABASE,
     CONF_MYSQL_HOST,
     CONF_QUERY,
@@ -60,14 +61,24 @@ from .const import (
     VALUE_PREFIX,
 )
 from .coordinator import MySQLQueryCoordinator, QueryResult
-from .helpers import rename_keys
+from .helpers import rename_keys, render_values
+from .sql import ERROR_MESSAGES, validate_read_only_query
 
 if TYPE_CHECKING:
     from . import HAMySQLConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
-SET_QUERY_SCHEMA = {vol.Optional(CONF_QUERY): cv.string}
+SET_QUERY_SCHEMA = {
+    vol.Optional(CONF_QUERY): cv.string,
+    # Values bound to the %s placeholders of query. Only scalars are
+    # accepted: those are the types MySQL can bind to a single placeholder.
+    # Strings are allowed to still be templates here, because a call made
+    # straight through the API arrives unrendered.
+    vol.Optional(ATTR_VALUES): vol.All(
+        cv.ensure_list, [vol.Any(None, bool, int, float, str)]
+    ),
+}
 SELECT_RECORD_SCHEMA = {
     vol.Required(CONF_ROWNUMBER): vol.All(vol.Coerce(int), vol.Range(min=0))
 }
@@ -151,6 +162,12 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
     """
 
     _attr_icon = "mdi:database-search"
+    # The device groups every sensor of one connection under a single card;
+    # this tells Home Assistant that _attr_name is the sensor's own name, so
+    # it is combined with the device name for the entity ID and friendly name
+    # (for example sensor.testdb_db_local_employees, "testdb @ db.local
+    # Employees") instead of being shown as if it were unrelated to it.
+    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -326,12 +343,32 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         attributes[ATTR_QUERY_TIME] = data.query_time
         return attributes
 
-    async def async_set_query(self, query: str | None = None) -> None:
+    async def async_set_query(
+        self, query: str | None = None, values: list[Any] | None = None
+    ) -> None:
         """Replace the query of this sensor and refresh it immediately.
 
-        Passing no query, or an empty one, restores the configured query.
+        Passing no query, or an empty one, restores the configured query and
+        discards any bound values with it. values without a new query is
+        refused: the default query was not written with placeholders in
+        mind, and the current query is always available to pass back in here,
+        as the executed_sql_query attribute.
         """
-        self.coordinator.query = query or self.coordinator.default_query
+        if not query:
+            if values:
+                raise ServiceValidationError(
+                    "values requires a new query; there is no query here to "
+                    "bind it to otherwise"
+                )
+            self.coordinator.query = self.coordinator.default_query
+            self.coordinator.query_values = None
+        else:
+            query = query.strip()
+            if (error := validate_read_only_query(query)) is not None:
+                raise ServiceValidationError(ERROR_MESSAGES[error])
+            self.coordinator.query = query
+            self.coordinator.query_values = render_values(self.hass, values)
+
         self._selected_row = 0
         _LOGGER.debug("New query for %s: %s", self.entity_id, self.coordinator.query)
         await self.coordinator.async_refresh()

@@ -36,7 +36,25 @@
         "menu_options": {
           "add_sensor": "Add a sensor",
           "select_sensor": "Edit a sensor",
-          "remove_sensor": "Remove sensors"
+          "remove_sensor": "Remove sensors",
+          "edit_connection": "Change the database connection"
+        }
+      },
+      "edit_connection": {
+        "title": "MySQL connection",
+        "description": "Enter the details of the MySQL or MariaDB server. The connection is tested before it is saved.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password",
+          "database": "Database"
+        },
+        "data_description": {
+          "host": "Host name or IP address of the database server.",
+          "port": "Port the server listens on. The default is 3306.",
+          "username": "User the queries run as. Read only rights are enough.",
+          "database": "Database used for queries that do not name one themselves."
         }
       },
       "add_sensor": {
@@ -55,7 +73,7 @@
           "max_json_rows": "Maximum rows in json_result"
         },
         "data_description": {
-          "query": "The SQL query to run, for example SELECT * FROM emp. It is tested against the database before it is saved.",
+          "query": "The SQL query to run, for example SELECT * FROM emp. Only a single reading statement is allowed; it is tested against the database before it is saved.",
           "value_column": "Column of the selected row to use as the state.",
           "value_template": "Template that returns the state. Takes precedence over the value column. The variables row, rows and row_count are available.",
           "state_class": "Needed for long term statistics. The value has to be numeric.",
@@ -84,7 +102,7 @@
           "max_json_rows": "Maximum rows in json_result"
         },
         "data_description": {
-          "query": "The SQL query to run, for example SELECT * FROM emp. It is tested against the database before it is saved.",
+          "query": "The SQL query to run, for example SELECT * FROM emp. Only a single reading statement is allowed; it is tested against the database before it is saved.",
           "value_column": "Column of the selected row to use as the state.",
           "value_template": "Template that returns the state. Takes precedence over the value column. The variables row, rows and row_count are available.",
           "state_class": "Needed for long term statistics. The value has to be numeric.",
@@ -102,10 +120,14 @@
     "error": {
       "name_exists": "A sensor with this name already exists.",
       "query_empty": "Fill in an SQL query.",
+      "query_multiple_statements": "Only one statement is allowed in a query.",
+      "query_not_read_only": "Only SELECT-style statements are allowed; ha_mysql only reads the database.",
       "query_failed": "The database refused the query: {error}",
       "query_no_results": "The query works but returned no rows. Check it, or submit it again to save it anyway.",
-      "cannot_connect": "Could not reach the database while testing the query: {error}",
-      "unknown": "Unexpected error while testing the query: {error}"
+      "cannot_connect": "Could not reach the database. Check the host, the port and your firewall. Details: {error}",
+      "invalid_auth": "The server refused the username or password.",
+      "unknown_database": "The database does not exist, or this user has no access to it.",
+      "unknown": "Unexpected error: {error}"
     },
     "abort": {
       "sensor_not_found": "That sensor no longer exists."
@@ -114,11 +136,15 @@
   "services": {
     "set_query": {
       "name": "Set query",
-      "description": "Replaces the query of a sensor and refreshes it immediately. Leave the query empty to restore the query from the configuration.",
+      "description": "Replaces the query of a sensor and refreshes it immediately. Leave the query empty to restore the query from the configuration; only SELECT-style statements are allowed.",
       "fields": {
         "query": {
           "name": "Query",
-          "description": "The SQL query to execute from now on."
+          "description": "The SQL query to execute from now on. Write a %s placeholder for each value in the values field, in the same order; a literal percent sign has to be doubled to %%."
+        },
+        "values": {
+          "name": "Values",
+          "description": "Optional list of values for the %s placeholders in the query, in the order the placeholders appear. Bound separately from the query text, so the database escapes them instead of them being part of the statement. Requires a new query in the same call."
         }
       }
     },

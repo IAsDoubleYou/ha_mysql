@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -274,8 +274,17 @@ class MySQLConnectionManager:
         with contextlib.suppress(Exception):
             pool._remove_connections()  # noqa: SLF001
 
-    def execute(self, query: str) -> list[dict[str, Any]]:
-        """Run a query and return its rows. Blocking, run in an executor."""
+    def execute(
+        self, query: str, params: Sequence[Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Run a query and return its rows. Blocking, run in an executor.
+
+        ``params`` binds values to %s placeholders in ``query``: the driver
+        quotes and escapes each one according to its type, so data passed
+        this way can never change what the statement does. Left as None, the
+        query is sent exactly as written, which also keeps a literal percent
+        sign, such as in LIKE '%text%', from being misread as a placeholder.
+        """
         last_error: Exception | None = None
 
         for attempt in range(1, MAX_QUERY_ATTEMPTS + 1):
@@ -288,7 +297,7 @@ class MySQLConnectionManager:
                         connection.cursor(buffered=True, dictionary=True)
                     ) as cursor,
                 ):
-                    cursor.execute(query)
+                    cursor.execute(query, params)
                     rows = cursor.fetchall() or []
             except mysql_errors.PoolError as err:
                 # Every connection is in use and none came free in time. The
@@ -400,11 +409,15 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
         self._warned_large_result = False
         self.default_query: str = config[CONF_QUERY]
         self.query: str = self.default_query
+        # Values bound to the %s placeholders of self.query, set by set_query.
+        # None outside of that, and reset together with self.query whenever
+        # set_query restores the default.
+        self.query_values: tuple[Any, ...] | None = None
 
-    def _fetch(self, query: str) -> QueryResult:
+    def _fetch(self, query: str, values: tuple[Any, ...] | None) -> QueryResult:
         """Execute the query and build the result. Runs in an executor."""
         now = dt_util.now()
-        rows = self._manager.execute(query)
+        rows = self._manager.execute(query, values)
 
         if not rows:
             return QueryResult(
@@ -453,7 +466,8 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
     async def _async_update_data(self) -> QueryResult:
         """Fetch the current result set."""
         query = self.query
+        values = self.query_values
         try:
-            return await self.hass.async_add_executor_job(self._fetch, query)
+            return await self.hass.async_add_executor_job(self._fetch, query, values)
         except MySQLError as err:
             raise UpdateFailed(str(err)) from err

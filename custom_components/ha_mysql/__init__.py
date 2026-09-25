@@ -47,6 +47,7 @@ from .const import (
 )
 from .coordinator import MySQLConnectionError, MySQLConnectionManager, MySQLQueryError
 from .helpers import generate_unique_id
+from .sql import ERROR_MESSAGES, validate_read_only_query
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,6 +106,16 @@ def _yaml_sensors(config: ConfigType) -> list[dict[str, Any]]:
         except vol.Invalid as err:
             _LOGGER.error(
                 "Skipping invalid ha_mysql sensor in configuration.yaml: %s", err
+            )
+            continue
+
+        # ha_mysql only reads, so a sensor with a write in its query, or more
+        # than one statement, is skipped rather than polled forever.
+        if (error := validate_read_only_query(validated[CONF_QUERY])) is not None:
+            _LOGGER.error(
+                "Skipping ha_mysql sensor %r in configuration.yaml: %s",
+                validated[CONF_NAME],
+                ERROR_MESSAGES[error],
             )
             continue
 

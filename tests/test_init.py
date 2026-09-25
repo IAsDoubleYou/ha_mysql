@@ -102,6 +102,21 @@ async def test_yaml_skips_invalid_sensor(hass: HomeAssistant, mock_execute) -> N
     assert [sensor["name"] for sensor in sensors] == ["Employees"]
 
 
+async def test_yaml_skips_a_mutating_sensor(hass: HomeAssistant, mock_execute) -> None:
+    """A sensor with a write in its query is skipped, not polled forever."""
+    config = {
+        **CONFIG,
+        "sensor": [
+            {"platform": "ha_mysql", "name": "Broken", "query": "DELETE FROM emp"},
+            {"platform": "ha_mysql", "name": "Employees", "query": "SELECT 1"},
+        ],
+    }
+    await _import_yaml(hass, config)
+
+    sensors = hass.config_entries.async_entries(DOMAIN)[0].options["sensors"]
+    assert [sensor["name"] for sensor in sensors] == ["Employees"]
+
+
 async def test_yaml_ignores_other_platforms(hass: HomeAssistant, mock_execute) -> None:
     """Sensors of other integrations are left alone."""
     config = {
@@ -222,7 +237,7 @@ async def test_options_update_reloads(hass: HomeAssistant, mock_execute) -> None
     await hass.async_block_till_done()
 
     assert hass.states.get(ENTITY_ID) is None
-    assert hass.states.get("sensor.departments") is not None
+    assert hass.states.get("sensor.testdb_db_local_departments") is not None
 
 
 async def test_sensor_platform_without_component_config(

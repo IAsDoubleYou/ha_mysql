@@ -36,7 +36,25 @@
         "menu_options": {
           "add_sensor": "Sensor toevoegen",
           "select_sensor": "Sensor bewerken",
-          "remove_sensor": "Sensoren verwijderen"
+          "remove_sensor": "Sensoren verwijderen",
+          "edit_connection": "Databaseverbinding wijzigen"
+        }
+      },
+      "edit_connection": {
+        "title": "MySQL-verbinding",
+        "description": "Vul de gegevens van de MySQL- of MariaDB-server in. De verbinding wordt getest voordat deze wordt opgeslagen.",
+        "data": {
+          "host": "Host",
+          "port": "Poort",
+          "username": "Gebruikersnaam",
+          "password": "Wachtwoord",
+          "database": "Database"
+        },
+        "data_description": {
+          "host": "Hostnaam of IP-adres van de databaseserver.",
+          "port": "Poort waarop de server luistert. Standaard is dat 3306.",
+          "username": "Gebruiker waaronder de query's draaien. Leesrechten volstaan.",
+          "database": "Database voor query's die zelf geen database noemen."
         }
       },
       "add_sensor": {
@@ -55,7 +73,7 @@
           "max_json_rows": "Maximum aantal rijen in json_result"
         },
         "data_description": {
-          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp. Hij wordt voor het opslaan getest op de database.",
+          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp. Er is maar één lezende statement toegestaan; hij wordt voor het opslaan getest op de database.",
           "value_column": "Kolom van de geselecteerde rij die als status wordt gebruikt.",
           "value_template": "Template die de status oplevert. Gaat voor op de waardekolom. De variabelen row, rows en row_count zijn beschikbaar.",
           "state_class": "Nodig voor langetermijnstatistieken. De waarde moet numeriek zijn.",
@@ -84,7 +102,7 @@
           "max_json_rows": "Maximum aantal rijen in json_result"
         },
         "data_description": {
-          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp. Hij wordt voor het opslaan getest op de database.",
+          "query": "De SQL-query die wordt uitgevoerd, bijvoorbeeld SELECT * FROM emp. Er is maar één lezende statement toegestaan; hij wordt voor het opslaan getest op de database.",
           "value_column": "Kolom van de geselecteerde rij die als status wordt gebruikt.",
           "value_template": "Template die de status oplevert. Gaat voor op de waardekolom. De variabelen row, rows en row_count zijn beschikbaar.",
           "state_class": "Nodig voor langetermijnstatistieken. De waarde moet numeriek zijn.",
@@ -102,10 +120,14 @@
     "error": {
       "name_exists": "Er bestaat al een sensor met deze naam.",
       "query_empty": "Vul een SQL-query in.",
+      "query_multiple_statements": "Er is maar één statement per query toegestaan.",
+      "query_not_read_only": "Alleen SELECT-achtige statements zijn toegestaan; ha_mysql leest de database alleen.",
       "query_failed": "De database weigert de query: {error}",
       "query_no_results": "De query werkt, maar levert geen rijen op. Controleer hem, of verstuur nogmaals om hem toch op te slaan.",
-      "cannot_connect": "De database was niet bereikbaar tijdens het testen van de query: {error}",
-      "unknown": "Onverwachte fout bij het testen van de query: {error}"
+      "cannot_connect": "De database is niet bereikbaar. Controleer de host, de poort en je firewall. Details: {error}",
+      "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
+      "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
+      "unknown": "Onverwachte fout: {error}"
     },
     "abort": {
       "sensor_not_found": "Die sensor bestaat niet meer."
@@ -114,11 +136,15 @@
   "services": {
     "set_query": {
       "name": "Query instellen",
-      "description": "Vervangt de query van een sensor en ververst deze direct. Laat de query leeg om de query uit de configuratie te herstellen.",
+      "description": "Vervangt de query van een sensor en ververst deze direct. Laat de query leeg om de query uit de configuratie te herstellen; alleen SELECT-achtige statements zijn toegestaan.",
       "fields": {
         "query": {
           "name": "Query",
-          "description": "De SQL-query die vanaf nu wordt uitgevoerd."
+          "description": "De SQL-query die vanaf nu wordt uitgevoerd. Schrijf voor elke waarde in het values-veld een %s-placeholder, in dezelfde volgorde; een letterlijk procentteken moet verdubbeld worden tot %%."
+        },
+        "values": {
+          "name": "Values",
+          "description": "Optionele lijst met waarden voor de %s-placeholders in de query, in de volgorde waarin ze voorkomen. Wordt los van de querytekst doorgegeven, zodat de database ze escaped in plaats van dat ze onderdeel worden van de statement. Vereist een nieuwe query in dezelfde aanroep."
         }
       }
     },

@@ -72,6 +72,12 @@ GRANT SELECT ON mydatabase.* TO 'homeassistant'@'%';
 FLUSH PRIVILEGES;
 ```
 
+## Read-only by design
+
+This is a sensor integration, so it never writes: a query is checked, wherever it comes from — the user interface, `configuration.yaml` or [`ha_mysql.set_query`](#ha_mysqlset_query) — before it is stored or run. A query with more than one statement, or one that is not `SELECT`-style, is refused with the reason logged or shown on the form; nothing invalid is ever sent to the database.
+
+**What this does not protect against.** The check reads the leading keyword of the query; it is not a full security boundary. A `SELECT` can still write through `INTO OUTFILE` or a stored function with side effects, and MySQL 8 accepts a CTE in front of an `UPDATE`. The database user having only `SELECT` rights, as shown above, is what actually stops a write.
+
 ## Installation
 
 ### Using [HACS](https://hacs.xyz/)
@@ -92,9 +98,9 @@ Add this repository as a custom repository, following [these directions](https:/
 1. Go to **Settings → Devices & services → Add integration**.
 2. Search for **HA MySQL**.
 3. Fill in the connection details. The connection is tested before it is saved, so mistakes are reported right away.
-4. Open **Configure** on the integration card to add sensors.
+4. Open **Configure** on the integration card to add sensors, or to change the database connection itself.
 
-Every connection becomes one device, with all its sensors underneath it. Sensors are added, edited and removed through **Configure**; changes take effect immediately, without a restart.
+Every connection becomes one device, with all its sensors underneath it. Sensors are added, edited and removed through **Configure**; changes take effect immediately, without a restart. The host, port, username, password and database can be changed the same way, through **Configure → Change the database connection**; the new connection is tested before it replaces the old one.
 
 ## Configuration through `configuration.yaml`
 
@@ -166,8 +172,13 @@ Whenever `unit_of_measurement`, `state_class` or `suggested_display_precision` i
 
 ```yaml
 value_template: "{{ row.salary | float * 1.21 }}"
+# row.salary "1000.50" -> state 1210.605
+
 value_template: "{{ rows | map(attribute='kwh') | map('float') | sum }}"
+# rows with kwh 1.2, 0.8 and 2.1 -> state 4.1
+
 value_template: "{{ 'busy' if row_count > 10 else 'quiet' }}"
+# row_count 2 -> state "quiet", row_count 15 -> state "busy"
 ```
 
 ### Attributes
@@ -222,7 +233,7 @@ sensor:
     suggested_display_precision: 2
 ```
 
-This sensor can be used directly in the energy dashboard.
+Because of `device_class: energy` and `state_class: total_increasing`, it can be added under **Settings → Dashboards → Energy** as a consumption source.
 
 ### Temperature from a logging table
 
@@ -298,21 +309,24 @@ automation:
         target:
           entity_id: sensor.customer
         data:
-          query: >
-            SELECT name, city, phone FROM customers
-            WHERE id = {{ states('input_text.customer_id') | int }}
+          query: SELECT name, city, phone FROM customers WHERE id = %s
+          values:
+            - "{{ states('input_text.customer_id') }}"
 ```
+
+The value is bound to the `%s` placeholder instead of being pasted into the query text, so whatever `input_text.customer_id` holds cannot change what the statement does. See [Parameterized queries](#parameterized-queries-with-values) below.
 
 ## Actions
 
 ### `ha_mysql.set_query`
 
-Replaces the query of a sensor and refreshes it right away.
+Replaces the query of a sensor and refreshes it right away. Only a single, reading statement is allowed — the same restriction as everywhere else a query enters ha_mysql; see [Read-only by design](#read-only-by-design).
 
 | Field | Required | Description |
 |---|---|---|
 | `entity_id` | yes | The sensor or sensors to change |
 | `query` | no | The query to run from now on. Leave it out, or empty, to restore the query from the configuration |
+| `values` | no | List of values for the `%s` placeholders in `query`, in the order they appear. Requires a new `query` in the same call — see [Parameterized queries](#parameterized-queries-with-values) |
 
 ```yaml
 action: ha_mysql.set_query
@@ -322,7 +336,42 @@ data:
   query: SELECT 'Hello Friends' FROM DUAL
 ```
 
-The replacement lasts until it is replaced again, or until Home Assistant restarts. The selected row is reset to the first one.
+The replacement lasts until it is replaced again, or until Home Assistant restarts. The selected row is reset to the first one. The query that is currently active is always available as the `executed_sql_query` attribute, so it can be read back and reused with new `values` later.
+
+### Parameterized queries with `values`
+
+`values` is optional. Leave it out and the query is sent exactly as written.
+
+When you do use it, write a `%s` placeholder in the query for each value and list the values in the same order. The values then travel to MySQL separately from the query text, and the driver quotes and escapes each one according to its type. A quote, a semicolon or a stray backslash in the value can no longer change what the statement does:
+
+```yaml
+action: ha_mysql.set_query
+target:
+  entity_id: sensor.department
+data:
+  query: SELECT * FROM emp WHERE department = %s AND active = %s
+  values:
+    - "{{ states('input_text.department') }}"
+    - 1
+```
+
+Every value is rendered through the Home Assistant template engine with native typing, so a template that produces a number or a boolean is bound as such instead of as text; a plain value without `{{ ... }}` is passed through untouched. A `%s` always stands for exactly one value, never a list — `WHERE id IN (%s)` with a list of ids does not work; write one placeholder per value instead. The number of placeholders and the number of values must match, or MySQL rejects the query.
+
+As soon as `values` is used, the `%` character becomes special in the query text, the same way it would in Python string formatting. A literal percent sign then has to be doubled:
+
+```yaml
+# Wrong: the % of the LIKE pattern is read as a placeholder
+query: "SELECT * FROM emp WHERE name LIKE '%kitchen%' AND active = %s"
+
+# Correct: double the literal percent signs
+query: "SELECT * FROM emp WHERE name LIKE '%%kitchen%%' AND active = %s"
+
+# Better: pass the whole pattern as a value
+query: "SELECT * FROM emp WHERE name LIKE %s AND active = %s"
+values: ["%kitchen%", 1]
+```
+
+This only applies once `values` is present. Without it, nothing in the query is interpreted and `LIKE '%kitchen%'` works as usual.
 
 ### `ha_mysql.select_record`
 
@@ -364,6 +413,10 @@ logger:
 | The server refused the username or password | Wrong credentials, or the user is not allowed to connect from this host. MySQL rights are per host: `'user'@'localhost'` is not the same as `'user'@'%'` |
 | The database does not exist | Wrong database name, or the user has no rights on it |
 
+### A query is refused with "Only SELECT-style statements are allowed" or "Only one statement is allowed in a query"
+
+ha_mysql only reads; see [Read-only by design](#read-only-by-design). Split a query that contains more than one statement, separated by `;`, into separate sensors, and replace `INSERT`, `UPDATE`, `DELETE` or any other write with a `SELECT`.
+
 ### The state is `unknown`
 
 * The column in `value_column` is not part of the result. The log lists the columns that are available.
@@ -395,14 +448,14 @@ A state can hold at most 255 characters. Longer values are truncated. Shorten th
 
 ### Too many connections
 
-Each connection uses a pool of at most five connections, shared by all sensors of that connection. If your server is tight on `max_connections`, raise the server limit or spread the sensors over longer intervals.
+Each connection uses a pool of at most ten connections, shared by all sensors of that connection. If your server is tight on `max_connections`, raise the server limit or spread the sensors over longer intervals.
 
 ## Notes
 
 * All sensors of one connection share the same connection pool, so adding sensors does not add connections.
 * A connection that the server dropped, for example after `wait_timeout`, is rebuilt automatically. A restart of Home Assistant is not needed.
 * Queries run in the background and never block Home Assistant.
-* Only read the database. `INSERT`, `UPDATE` and `DELETE` are not supported and the query runs on every interval.
+* Only reading statements are allowed; see [Read-only by design](#read-only-by-design).
 
 ## Multiple databases
 

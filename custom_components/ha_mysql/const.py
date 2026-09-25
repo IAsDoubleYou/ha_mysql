@@ -28,6 +28,8 @@ DATA_YAML_IMPORTED: Final = "yaml_imported"
 CONF_SENSORS: Final = "sensors"
 CONF_QUERY: Final = "query"
 CONF_ROWNUMBER: Final = "rownumber"
+# Values bound to the %s placeholders of a parameterized set_query call.
+ATTR_VALUES: Final = "values"
 CONF_MAX_JSON_ROWS: Final = "max_json_rows"
 CONF_VALUE_COLUMN: Final = "value_column"
 CONF_VALUE_TEMPLATE: Final = "value_template"

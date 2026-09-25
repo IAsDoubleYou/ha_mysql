@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from freezegun.api import FrozenDateTimeFactory
+import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.const import MAX_LENGTH_STATE_STATE, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .conftest import ENTITY_ID, make_entry, make_sensor, setup_entry
@@ -76,11 +78,16 @@ async def test_sensor_is_linked_to_a_device(hass: HomeAssistant, mock_execute) -
     assert entity.device_id == device.id
 
 
-async def test_friendly_name_is_unchanged(hass: HomeAssistant, mock_execute) -> None:
-    """The device does not creep into the name of existing sensors."""
+async def test_friendly_name_combines_device_and_sensor(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """The friendly name combines the device and the sensor's own name."""
     await setup_entry(hass, make_entry())
 
-    assert hass.states.get(ENTITY_ID).attributes["friendly_name"] == "Employees"
+    assert (
+        hass.states.get(ENTITY_ID).attributes["friendly_name"]
+        == "testdb @ db.local Employees"
+    )
 
 
 async def test_value_column(hass: HomeAssistant, mock_execute) -> None:
@@ -168,6 +175,103 @@ async def test_unknown_device_class_is_ignored(
     assert "device_class" not in state.attributes
 
 
+async def test_value_column_with_no_rows(hass: HomeAssistant, mock_execute) -> None:
+    """A value column on an empty result set leaves the state unknown."""
+    mock_execute.return_value = []
+    await setup_entry(hass, make_entry([make_sensor(value_column="name")]))
+
+    assert hass.states.get(ENTITY_ID).state == "unknown"
+
+
+async def test_value_template_render_error(hass: HomeAssistant, mock_execute) -> None:
+    """A template that fails at render time leaves the state unknown."""
+    await setup_entry(
+        hass, make_entry([make_sensor(value_template="{{ row.missing + 1 }}")])
+    )
+
+    assert hass.states.get(ENTITY_ID).state == "unknown"
+
+
+async def test_non_numeric_value_is_unknown(hass: HomeAssistant, mock_execute) -> None:
+    """A non-numeric value is reported as unknown when a unit is configured."""
+    await setup_entry(
+        hass,
+        make_entry([make_sensor(value_column="name", state_class="measurement")]),
+    )
+
+    assert hass.states.get(ENTITY_ID).state == "unknown"
+
+
+async def test_long_string_value_is_truncated(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A value longer than the state limit is cut off instead of rejected."""
+    mock_execute.return_value = [{"big": "x" * 300}]
+    await setup_entry(hass, make_entry([make_sensor(value_column="big")]))
+
+    assert len(hass.states.get(ENTITY_ID).state) == MAX_LENGTH_STATE_STATE
+
+
+async def test_timestamp_device_class_parses_string(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A timestamp device class parses a string value into a datetime."""
+    mock_execute.return_value = [{"ts": "2024-01-01 10:00:00+00:00"}]
+    await setup_entry(
+        hass, make_entry([make_sensor(value_column="ts", device_class="timestamp")])
+    )
+
+    assert hass.states.get(ENTITY_ID).state == "2024-01-01T10:00:00+00:00"
+
+
+async def test_date_device_class_parses_string(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A date device class parses a string value into a date."""
+    mock_execute.return_value = [{"d": "2024-01-01"}]
+    await setup_entry(
+        hass, make_entry([make_sensor(value_column="d", device_class="date")])
+    )
+
+    assert hass.states.get(ENTITY_ID).state == "2024-01-01"
+
+
+async def test_timestamp_device_class_passes_through_datetime(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A native datetime, as the driver returns for a TIMESTAMP column, is kept."""
+    mock_execute.return_value = [{"ts": datetime(2024, 1, 1, 10, 0, 0, tzinfo=UTC)}]
+    await setup_entry(
+        hass, make_entry([make_sensor(value_column="ts", device_class="timestamp")])
+    )
+
+    assert hass.states.get(ENTITY_ID).state == "2024-01-01T10:00:00+00:00"
+
+
+async def test_date_device_class_passes_through_date(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A native date, as the driver returns for a DATE column, is kept."""
+    mock_execute.return_value = [{"d": date(2024, 1, 1)}]
+    await setup_entry(
+        hass, make_entry([make_sensor(value_column="d", device_class="date")])
+    )
+
+    assert hass.states.get(ENTITY_ID).state == "2024-01-01"
+
+
+async def test_date_device_class_truncates_datetime(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A datetime value on a date sensor drops its time component."""
+    mock_execute.return_value = [{"d": datetime(2024, 1, 1, 15, 30, tzinfo=UTC)}]
+    await setup_entry(
+        hass, make_entry([make_sensor(value_column="d", device_class="date")])
+    )
+
+    assert hass.states.get(ENTITY_ID).state == "2024-01-01"
+
+
 async def test_select_record_switches_row(hass: HomeAssistant, mock_execute) -> None:
     """select_record exposes the columns of the requested row."""
     await setup_entry(hass, make_entry())
@@ -247,6 +351,162 @@ async def test_set_query_without_query_restores_default(
     )
 
 
+async def test_set_query_binds_values(hass: HomeAssistant, mock_execute) -> None:
+    """Values passed with a new query are bound to its %s placeholders."""
+    await setup_entry(hass, make_entry())
+    mock_execute.reset_mock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_QUERY,
+        {
+            "entity_id": ENTITY_ID,
+            "query": "SELECT * FROM emp WHERE id = %s",
+            "values": [1],
+        },
+        blocking=True,
+    )
+
+    assert mock_execute.call_args[0][1] == "SELECT * FROM emp WHERE id = %s"
+    assert mock_execute.call_args[0][2] == (1,)
+
+
+async def test_set_query_values_stay_out_of_the_statement(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A value that looks like SQL is bound as data, not glued onto the query.
+
+    This is the actual injection defence: whatever the value contains, it
+    travels to the driver as a bound parameter instead of becoming part of
+    the statement text.
+    """
+    await setup_entry(hass, make_entry())
+    mock_execute.reset_mock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_QUERY,
+        {
+            "entity_id": ENTITY_ID,
+            "query": "SELECT * FROM emp WHERE id = %s",
+            "values": ["1; DROP TABLE emp"],
+        },
+        blocking=True,
+    )
+
+    query = mock_execute.call_args[0][1]
+    assert "DROP TABLE" not in query
+    assert mock_execute.call_args[0][2] == ("1; DROP TABLE emp",)
+
+
+async def test_set_query_renders_templated_values(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A templated value is bound with its native type, not as text."""
+    await setup_entry(hass, make_entry())
+    mock_execute.reset_mock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_QUERY,
+        {
+            "entity_id": ENTITY_ID,
+            "query": "SELECT * FROM emp WHERE id = %s",
+            "values": ["{{ 1 + 1 }}"],
+        },
+        blocking=True,
+    )
+
+    assert mock_execute.call_args[0][2] == (2,)
+
+
+async def test_set_query_rejects_a_broken_value_template(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A value that fails to render is reported instead of sent to the driver."""
+    await setup_entry(hass, make_entry())
+    mock_execute.reset_mock()
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_QUERY,
+            {
+                "entity_id": ENTITY_ID,
+                "query": "SELECT * FROM emp WHERE id = %s",
+                "values": ["{{ 1 / 0 }}"],
+            },
+            blocking=True,
+        )
+
+    assert mock_execute.call_count == 0
+
+
+async def test_set_query_rejects_a_write(hass: HomeAssistant, mock_execute) -> None:
+    """A mutating query is refused before it ever reaches the database."""
+    await setup_entry(hass, make_entry())
+    mock_execute.reset_mock()
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_QUERY,
+            {"entity_id": ENTITY_ID, "query": "DELETE FROM emp"},
+            blocking=True,
+        )
+
+    assert mock_execute.call_count == 0
+    assert (
+        hass.states.get(ENTITY_ID).attributes["executed_sql_query"]
+        == "SELECT * FROM emp"
+    )
+
+
+async def test_set_query_rejects_stacked_statements(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A second statement behind a reading first one is refused too.
+
+    A read-only check that only looked at the first keyword would let
+    "SELECT 1; DELETE FROM emp" through, since "select" reads. The database
+    would still run both.
+    """
+    await setup_entry(hass, make_entry())
+    mock_execute.reset_mock()
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_QUERY,
+            {"entity_id": ENTITY_ID, "query": "SELECT 1; DELETE FROM emp"},
+            blocking=True,
+        )
+
+    assert mock_execute.call_count == 0
+
+
+async def test_set_query_values_without_a_query_is_rejected(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Values only makes sense together with the query it binds to.
+
+    The current query is always available as the executed_sql_query
+    attribute, ready to pass back in here alongside new values.
+    """
+    await setup_entry(hass, make_entry())
+    mock_execute.reset_mock()
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_QUERY,
+            {"entity_id": ENTITY_ID, "values": [1]},
+            blocking=True,
+        )
+
+    assert mock_execute.call_count == 0
+
+
 async def test_becomes_unavailable_on_database_error(
     hass: HomeAssistant, mock_execute, freezer: FrozenDateTimeFactory
 ) -> None:
@@ -281,7 +541,7 @@ async def test_one_broken_query_keeps_others_running(
     """A sensor with a failing query does not take the rest down."""
     rows = list(mock_execute.return_value)
 
-    def _execute(self, query):
+    def _execute(self, query, params=None):
         if "broken" in query:
             raise MySQLConnectionError("nope")
         return list(rows)
@@ -301,7 +561,7 @@ async def test_one_broken_query_keeps_others_running(
     )
 
     assert hass.states.get(ENTITY_ID).state == "2"
-    assert hass.states.get("sensor.broken").state == STATE_UNAVAILABLE
+    assert hass.states.get("sensor.testdb_db_local_broken").state == STATE_UNAVAILABLE
 
 
 async def test_empty_result_set(hass: HomeAssistant, mock_execute) -> None:

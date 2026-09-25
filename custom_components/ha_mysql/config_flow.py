@@ -22,7 +22,7 @@ from homeassistant.const import (
     CONF_SCAN_INTERVAL,
     CONF_UNIT_OF_MEASUREMENT,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
@@ -59,6 +59,7 @@ from .const import (
     SOURCE_YAML,
 )
 from .coordinator import MySQLConnectionError, MySQLConnectionManager, MySQLQueryError
+from .sql import validate_read_only_query
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -205,6 +206,37 @@ def _error_detail(err: Exception) -> str:
     return message
 
 
+async def _async_validate_connection(
+    hass: HomeAssistant, connection: dict[str, Any]
+) -> tuple[str | None, str]:
+    """Try the connection.
+
+    Returns the error key to show on the form, and the message that goes
+    with it. Causes that speak for themselves come without a message. Shared
+    by the initial setup and the options flow, so editing the connection
+    later is checked the same way as setting it up.
+    """
+    manager = MySQLConnectionManager(connection)
+    try:
+        await hass.async_add_executor_job(manager.test_connection)
+    except MySQLQueryError as err:
+        if err.errno == _ERRNO_ACCESS_DENIED:
+            return "invalid_auth", ""
+        if err.errno in (_ERRNO_DATABASE_ACCESS_DENIED, _ERRNO_UNKNOWN_DATABASE):
+            return "unknown_database", ""
+        _LOGGER.debug("Unexpected database error while validating: %s", err)
+        return "unknown", _error_detail(err)
+    except MySQLConnectionError as err:
+        # A refused connection, a timeout and a failed TLS handshake all end
+        # up here, and they need very different fixes, so the reason from the
+        # driver is shown instead of only the generic advice.
+        return "cannot_connect", _error_detail(err)
+    except Exception as err:
+        _LOGGER.exception("Unexpected error while validating the connection")
+        return "unknown", _error_detail(err)
+    return None, ""
+
+
 class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the setup of a MySQL connection."""
 
@@ -215,34 +247,6 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry: ConfigEntry) -> HAMySQLOptionsFlow:
         """Return the options flow that manages the sensors."""
         return HAMySQLOptionsFlow()
-
-    async def _async_validate(
-        self, connection: dict[str, Any]
-    ) -> tuple[str | None, str]:
-        """Try the connection.
-
-        Returns the error key to show on the form, and the message that goes
-        with it. Causes that speak for themselves come without a message.
-        """
-        manager = MySQLConnectionManager(connection)
-        try:
-            await self.hass.async_add_executor_job(manager.test_connection)
-        except MySQLQueryError as err:
-            if err.errno == _ERRNO_ACCESS_DENIED:
-                return "invalid_auth", ""
-            if err.errno in (_ERRNO_DATABASE_ACCESS_DENIED, _ERRNO_UNKNOWN_DATABASE):
-                return "unknown_database", ""
-            _LOGGER.debug("Unexpected database error while validating: %s", err)
-            return "unknown", _error_detail(err)
-        except MySQLConnectionError as err:
-            # A refused connection, a timeout and a failed TLS handshake all
-            # end up here, and they need very different fixes, so the reason
-            # from the driver is shown instead of only the generic advice.
-            return "cannot_connect", _error_detail(err)
-        except Exception as err:
-            _LOGGER.exception("Unexpected error while validating the connection")
-            return "unknown", _error_detail(err)
-        return None, ""
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -263,7 +267,7 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(_connection_id(connection))
             self._abort_if_unique_id_configured()
 
-            error, detail = await self._async_validate(connection)
+            error, detail = await _async_validate_connection(self.hass, connection)
             if error is None:
                 return self.async_create_entry(
                     title=_entry_title(connection),
@@ -372,6 +376,11 @@ class HAMySQLOptionsFlow(OptionsFlow):
         if not query:
             return {CONF_QUERY: "query_empty"}, ""
 
+        # Checked before the query ever reaches the database: ha_mysql only
+        # reads, and testing a write here would mean running it for real.
+        if (error := validate_read_only_query(query)) is not None:
+            return {CONF_QUERY: error}, ""
+
         check = await self._async_run_query(query)
         if check.error is not None:
             field = "base" if check.error in _BASE_ERRORS else CONF_QUERY
@@ -392,7 +401,48 @@ class HAMySQLOptionsFlow(OptionsFlow):
         menu = ["add_sensor"]
         if self._sensors:
             menu += ["select_sensor", "remove_sensor"]
+        menu += ["edit_connection"]
         return self.async_show_menu(step_id="init", menu_options=menu)
+
+    async def async_step_edit_connection(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change the database connection of this entry."""
+        errors: dict[str, str] = {}
+        detail = ""
+
+        if user_input is not None:
+            connection = {
+                CONF_MYSQL_HOST: user_input[CONF_MYSQL_HOST].strip(),
+                CONF_MYSQL_PORT: int(user_input[CONF_MYSQL_PORT]),
+                CONF_MYSQL_USERNAME: user_input[CONF_MYSQL_USERNAME],
+                CONF_MYSQL_PASSWORD: user_input[CONF_MYSQL_PASSWORD],
+                CONF_MYSQL_DATABASE: user_input[CONF_MYSQL_DATABASE].strip(),
+            }
+
+            error, detail = await _async_validate_connection(self.hass, connection)
+            if error is None:
+                # The unique ID is left untouched, same as mysql_query: it
+                # only identifies the config entry, and changing it here
+                # would risk splitting the entry's history from its entities.
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    title=_entry_title(connection),
+                    data=connection,
+                )
+                # Only the connection changed; the sensors are written back
+                # unchanged so this step cannot wipe out the options.
+                return self.async_create_entry(data=dict(self.config_entry.options))
+            errors["base"] = error
+
+        return self.async_show_form(
+            step_id="edit_connection",
+            data_schema=self.add_suggested_values_to_schema(
+                CONNECTION_SCHEMA, user_input or dict(self.config_entry.data)
+            ),
+            errors=errors,
+            description_placeholders={"error": detail},
+        )
 
     async def async_step_add_sensor(
         self, user_input: dict[str, Any] | None = None

@@ -12,6 +12,7 @@ from homeassistant.data_entry_flow import FlowResultType, InvalidData
 
 from .conftest import (
     CONNECTION,
+    SENSOR,
     UNIQUE_ID,
     FakePool,
     make_entry,
@@ -244,7 +245,7 @@ async def test_options_add_sensor(hass: HomeAssistant, mock_execute) -> None:
     assert sensors[0]["name"] == "Departments"
     assert sensors[0]["scan_interval"] == 60
     assert sensors[0]["unique_id"]
-    assert hass.states.get("sensor.departments") is not None
+    assert hass.states.get("sensor.testdb_db_local_departments") is not None
 
 
 async def test_options_duplicate_name(hass: HomeAssistant, mock_execute) -> None:
@@ -356,6 +357,56 @@ async def test_options_add_sensor_query_recovers(
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["sensors"][0]["query"] == "SELECT * FROM dept"
+
+
+async def test_options_add_sensor_rejects_a_write(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A mutating query is refused without ever reaching the database.
+
+    ha_mysql only reads, so testing the query would mean running the write
+    for real if this were checked after the fact instead of before it.
+    """
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.reset_mock()
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**NEW_SENSOR, "query": "DELETE FROM dept"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"query": "query_not_read_only"}
+    assert mock_execute.call_count == 0
+    assert entry.options["sensors"] == []
+
+
+async def test_options_add_sensor_rejects_stacked_statements(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A second statement behind a reading first one is refused too."""
+    entry = make_entry([])
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "add_sensor"}
+    )
+
+    mock_execute.reset_mock()
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**NEW_SENSOR, "query": "SELECT 1; DELETE FROM dept"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"query": "query_multiple_statements"}
+    assert mock_execute.call_count == 0
+    assert entry.options["sensors"] == []
 
 
 async def test_options_add_sensor_cannot_connect(
@@ -594,6 +645,38 @@ async def test_options_edit_sensor_invalid_query(
     assert entry.options["sensors"][0]["scan_interval"] == 30
 
 
+async def test_options_edit_sensor_rejects_a_write(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A mutating query is refused without ever reaching the database."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "select_sensor"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"unique_id": "ha_mysql_employees"}
+    )
+
+    mock_execute.reset_mock()
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "name": "Employees",
+            "query": "UPDATE emp SET active = 0",
+            "scan_interval": 120,
+            "max_json_rows": 0,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"query": "query_not_read_only"}
+    assert mock_execute.call_count == 0
+    assert entry.options["sensors"][0]["query"] == "SELECT * FROM emp"
+
+
 async def test_options_edit_sensor_keeps_empty_query(
     hass: HomeAssistant, mock_execute
 ) -> None:
@@ -631,7 +714,7 @@ async def test_options_remove_sensor(hass: HomeAssistant, mock_execute) -> None:
         [make_sensor(), make_sensor(name="Departments", unique_id="dept")]
     )
     await setup_entry(hass, entry)
-    assert hass.states.get("sensor.departments") is not None
+    assert hass.states.get("sensor.testdb_db_local_departments") is not None
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
@@ -643,7 +726,7 @@ async def test_options_remove_sensor(hass: HomeAssistant, mock_execute) -> None:
     await hass.async_block_till_done()
 
     assert [sensor["name"] for sensor in entry.options["sensors"]] == ["Employees"]
-    assert hass.states.get("sensor.departments") is None
+    assert hass.states.get("sensor.testdb_db_local_departments") is None
 
 
 async def test_options_menu_without_sensors(hass: HomeAssistant, mock_execute) -> None:
@@ -653,4 +736,141 @@ async def test_options_menu_without_sensors(hass: HomeAssistant, mock_execute) -
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
-    assert result["menu_options"] == ["add_sensor"]
+    assert result["menu_options"] == ["add_sensor", "edit_connection"]
+
+
+async def test_options_menu_with_sensors(hass: HomeAssistant, mock_execute) -> None:
+    """Changing the connection is always offered, sensors or not."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["menu_options"] == [
+        "add_sensor",
+        "select_sensor",
+        "remove_sensor",
+        "edit_connection",
+    ]
+
+
+async def test_options_edit_connection(hass: HomeAssistant, mock_execute) -> None:
+    """A working new connection replaces the stored one and reloads the entry."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "edit_connection"}
+    )
+    assert result["step_id"] == "edit_connection"
+
+    new_connection = {**USER_INPUT, "host": "other.local"}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], new_connection
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data["host"] == "other.local"
+    assert entry.title == "testdb @ other.local"
+    # The unique ID is left alone, same as the sensors: only the connection
+    # itself is being changed here.
+    assert entry.unique_id == UNIQUE_ID
+    # The sensors are still there: changing the connection must not wipe them.
+    assert entry.options["sensors"] == [SENSOR]
+
+
+async def test_options_edit_connection_prefilled(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """The form starts out with the settings the entry already has."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "edit_connection"}
+    )
+
+    suggested = {
+        key: value.get("suggested_value")
+        for key, value in (
+            (field.schema, field.description) for field in result["data_schema"].schema
+        )
+        if value
+    }
+    assert suggested == CONNECTION
+
+
+async def test_options_edit_connection_cannot_connect(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A broken new connection is reported and the old one is kept."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "edit_connection"}
+    )
+
+    mock_execute.side_effect = MySQLConnectionError("no route")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**USER_INPUT, "host": "other.local"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "edit_connection"
+    assert result["errors"] == {"base": "cannot_connect"}
+    assert entry.data["host"] == "db.local"
+
+
+async def test_options_edit_connection_invalid_auth(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Wrong credentials are reported as such, and the old ones are kept."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "edit_connection"}
+    )
+
+    mock_execute.side_effect = MySQLQueryError("Access denied", 1045)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**USER_INPUT, "password": "wrong"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert entry.data["password"] == "secret"
+
+
+async def test_options_edit_connection_recovers(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """The form can be submitted again once the new settings are correct."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "edit_connection"}
+    )
+
+    mock_execute.side_effect = MySQLConnectionError("no route")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**USER_INPUT, "host": "other.local"}
+    )
+    assert result["errors"] == {"base": "cannot_connect"}
+
+    mock_execute.side_effect = None
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**USER_INPUT, "host": "other.local"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data["host"] == "other.local"
