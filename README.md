@@ -147,7 +147,7 @@ Used by both the user interface and `configuration.yaml`.
 
 | Option | Required | Default | Description |
 |---|---|---|---|
-| `name` | yes | | Name of the sensor, and the base of its entity ID |
+| `name` | yes | | Name of the sensor. Combined with the connection's device name for a new sensor's entity ID and friendly name |
 | `query` | yes | | SQL query to run |
 | `scan_interval` | no | `30` | Seconds between two runs of the query |
 | `value_column` | no | | Column of the selected row to use as the state, instead of the row count |

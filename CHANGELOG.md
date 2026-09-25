@@ -5,11 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0] - 2026-09-23
+## [1.3.0] - 2026-09-25
 
-This release closes a SQL injection gap in `ha_mysql.set_query`, and makes it
+This release closes a SQL injection gap in `ha_mysql.set_query`, makes it
 possible to change a connection's host, port, username, password and database
-without removing and re-adding the integration.
+without removing and re-adding the integration, and gives the integration its
+own icon and logo in the Home Assistant UI.
 
 ### Added
 
@@ -33,6 +34,10 @@ without removing and re-adding the integration.
   artwork. It keys out the background with a flood fill from the image
   border, so dark elements inside the artwork are preserved, and typesets
   the wordmark.
+- Releases ship a `homeassistant-ha_mysql.zip` asset again, built and
+  attached automatically by `.github/workflows/release.yaml` when a release
+  is published. HACS installs from it instead of fetching every file
+  separately through the GitHub API, and the downloads badge counts again.
 
 ### Changed
 
