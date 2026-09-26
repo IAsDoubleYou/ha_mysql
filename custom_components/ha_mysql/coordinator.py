@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-import contextlib
+import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 import decimal
-import itertools
 import json
 import logging
-import threading
-import time
+import ssl
 from typing import Any
 
-import mysql.connector
-from mysql.connector import errors as mysql_errors
-from mysql.connector.pooling import MySQLConnectionPool, PooledMySQLConnection
+import aiomysql
+from pymysql import err as pymysql_err
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_SCAN_INTERVAL
@@ -34,40 +31,40 @@ from .const import (
     CONF_MYSQL_PORT,
     CONF_MYSQL_USERNAME,
     CONF_QUERY,
+    CONF_USE_TLS,
     CONNECT_TIMEOUT,
     DEFAULT_MAX_JSON_ROWS,
     DEFAULT_SCAN_INTERVAL_SECONDS,
+    DEFAULT_USE_TLS,
     DOMAIN,
     LARGE_RESULT_WARNING_THRESHOLD,
-    MAX_QUERY_ATTEMPTS,
-    POOL_ACQUIRE_INTERVAL,
-    POOL_ACQUIRE_TIMEOUT,
-    POOL_SIZE,
-    READ_TIMEOUT,
-    RETRY_DELAY,
-    WRITE_TIMEOUT,
+    POOL_MAX_SIZE,
+    POOL_MIN_SIZE,
+    POOL_RECYCLE_SECONDS,
+    QUERY_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-# Pool names must be unique within the process and are restricted to a small
-# character set, so they are generated instead of derived from user input.
-_POOL_COUNTER = itertools.count(1)
+# A server-side driver error carries (errno, message) in .args; a client-side
+# one, such as a refused connection, carries only the message.
+_ERRNO_MESSAGE_ARGS = 2
 
-# Errors that indicate a broken or timed out connection rather than a bad
-# query. Only these are worth retrying.
-#
-# The three timeout errors derive straight from Error instead of from
-# InterfaceError or OperationalError, so they have to be named one by one.
-# Without them a network timeout counts as a query the server rejected, which
-# fails the config entry for good instead of retrying it, and leaves the pool
-# holding connections that will never answer again.
-_CONNECTION_ERRORS = (
-    mysql_errors.InterfaceError,
-    mysql_errors.OperationalError,
-    mysql_errors.ConnectionTimeoutError,
-    mysql_errors.ReadTimeoutError,
-    mysql_errors.WriteTimeoutError,
+# PyMySQL error codes that mean the server could not be reached at all. Codes
+# outside this set, including a rejected username or an unknown database,
+# raise the very same OperationalError as a dropped socket does, so the code
+# is what tells the two apart, not the exception class.
+_CONNECTIVITY_ERRNOS = frozenset(
+    {
+        2002,  # Can't connect through the socket file
+        2003,  # Can't connect to the server
+        2005,  # Unknown host
+        2006,  # MySQL server has gone away
+        2013,  # Lost connection during query
+        1040,  # Too many connections
+        1053,  # Server shutdown in progress
+        1152,  # Aborted connection
+    }
 )
 
 
@@ -86,6 +83,68 @@ class MySQLConnectionError(MySQLError):
 
 class MySQLQueryError(MySQLError):
     """Raised when the database rejects the query itself."""
+
+
+class TLSUnavailableError(HomeAssistantError):
+    """Raised when TLS was asked for but the connection ended up in plain text."""
+
+
+def _error_details(err: BaseException) -> tuple[int | None, str]:
+    """Split a driver error into its MySQL error number and message."""
+    args = getattr(err, "args", ())
+    if len(args) >= _ERRNO_MESSAGE_ARGS and isinstance(args[0], int):
+        return args[0], str(args[1])
+    if len(args) == 1:
+        return None, str(args[0])
+    return None, str(err)
+
+
+def _wrap_error(err: BaseException, target: str) -> MySQLError:
+    """Turn a driver error into a MySQLConnectionError or MySQLQueryError."""
+    if isinstance(err, pymysql_err.Error):
+        errno, message = _error_details(err)
+        if errno is None or errno in _CONNECTIVITY_ERRNOS:
+            return MySQLConnectionError(
+                f"Could not reach MySQL at {target}: {message}", errno
+            )
+        return MySQLQueryError(f"Query failed: {message}", errno)
+    # OSError, and anything else that is not a MySQL protocol error, is always
+    # a connectivity problem: the driver never got far enough to send a query.
+    return MySQLConnectionError(f"Could not reach MySQL at {target}: {err}")
+
+
+def _tls_context() -> ssl.SSLContext:
+    """Return the TLS context used for an encrypted connection.
+
+    The server certificate is deliberately not checked. A database on a home
+    network nearly always carries a self signed one, and demanding a
+    verifiable certificate would make the option unusable for most setups.
+    This encrypts the traffic, which keeps it from being read off the
+    network; it does not prove the server is the one it claims to be.
+    """
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+async def _async_verify_tls(connection: aiomysql.Connection) -> None:
+    """Raise when a connection that asked for TLS is not actually encrypted.
+
+    aiomysql only runs the handshake when the server advertises TLS, and
+    carries on in plain text when it does not, without reporting anything. So
+    asking for TLS is not the same as getting it, and the session status is
+    the only thing that says which of the two happened.
+    """
+    async with connection.cursor() as cursor:
+        await cursor.execute("SHOW STATUS LIKE 'Ssl_cipher'")
+        row = await cursor.fetchone()
+
+    if not (row and row[1]):
+        raise TLSUnavailableError(
+            "The server accepted the connection but did not encrypt it. Check "
+            "that the database is configured for TLS, or turn the option off."
+        )
 
 
 def _decode_binary(value: bytes | bytearray) -> str:
@@ -166,118 +225,53 @@ class QueryResult:
 
 
 class MySQLConnectionManager:
-    """Own a lazily created connection pool shared by every sensor."""
+    """Own a connection pool shared by every sensor of one config entry."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         """Store the database configuration."""
-        self._db_config: dict[str, Any] = {
+        self._use_tls: bool = bool(config.get(CONF_USE_TLS, DEFAULT_USE_TLS))
+        self._connect_kwargs: dict[str, Any] = {
             "host": config[CONF_MYSQL_HOST],
             "port": int(config[CONF_MYSQL_PORT]),
             "user": config[CONF_MYSQL_USERNAME],
             "password": config[CONF_MYSQL_PASSWORD],
-            "database": config[CONF_MYSQL_DATABASE],
-            "connection_timeout": CONNECT_TIMEOUT,
-            # The connect timeout only covers opening the connection and the
-            # handshake. See READ_TIMEOUT for why the rest needs bounding too.
-            "read_timeout": READ_TIMEOUT,
-            "write_timeout": WRITE_TIMEOUT,
-            # TLS is used when the server offers it and skipped when it does
-            # not, and the certificate is not checked: a database on a home
-            # network nearly always has a self signed one, and refusing that
-            # would lock out every existing setup. Spelled out instead of left
-            # to the driver, so upgrading it cannot quietly change any of this.
-            "ssl_disabled": False,
-            "ssl_verify_cert": False,
-            "ssl_verify_identity": False,
+            "db": config[CONF_MYSQL_DATABASE],
+            "connect_timeout": CONNECT_TIMEOUT,
             # Without autocommit a pooled connection keeps an open transaction,
             # which makes InnoDB return the same snapshot on every poll.
             "autocommit": True,
         }
-        self._pool: MySQLConnectionPool | None = None
-        self._lock = threading.Lock()
+        if self._use_tls:
+            self._connect_kwargs["ssl"] = _tls_context()
+
+        self._target: str = (
+            f"{self._connect_kwargs['host']}:{self._connect_kwargs['port']}"
+            f"/{self._connect_kwargs['db']}"
+        )
+        self._pool: aiomysql.Pool | None = None
+        self._pool_lock = asyncio.Lock()
 
     @property
     def target(self) -> str:
         """Return a printable description of the configured database."""
-        return (
-            f"{self._db_config['host']}:{self._db_config['port']}"
-            f"/{self._db_config['database']}"
-        )
+        return self._target
 
-    def _get_pool(self) -> MySQLConnectionPool:
+    async def _get_pool(self) -> aiomysql.Pool:
         """Return the shared pool, creating it on first use."""
-        with self._lock:
+        async with self._pool_lock:
             if self._pool is None:
-                self._pool = MySQLConnectionPool(
-                    pool_name=f"{DOMAIN}_{next(_POOL_COUNTER)}",
-                    pool_size=POOL_SIZE,
-                    pool_reset_session=True,
-                    **self._db_config,
+                self._pool = await aiomysql.create_pool(
+                    minsize=POOL_MIN_SIZE,
+                    maxsize=POOL_MAX_SIZE,
+                    pool_recycle=POOL_RECYCLE_SECONDS,
+                    **self._connect_kwargs,
                 )
             return self._pool
 
-    def _checkout(self, pool: MySQLConnectionPool) -> PooledMySQLConnection:
-        """Take a connection out of the pool, waiting for one to come free.
-
-        The pool of the driver never blocks: it reports "pool exhausted" as
-        soon as every connection is handed out. Sensors that poll at the same
-        moment would fail on that even though a connection comes free a
-        fraction of a second later, so the wait is polled here.
-        """
-        deadline = time.monotonic() + POOL_ACQUIRE_TIMEOUT
-        while True:
-            try:
-                return pool.get_connection()
-            except mysql_errors.PoolError:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(POOL_ACQUIRE_INTERVAL)
-
-    @contextlib.contextmanager
-    def _connection(self, pool: MySQLConnectionPool) -> Iterator[PooledMySQLConnection]:
-        """Yield a pooled connection and always hand it back afterwards.
-
-        Closing a pooled connection does not close the socket, it returns the
-        connection to the pool. That has to happen on every path: after a
-        successful query, after a failed one, and after an unexpected
-        exception. A connection that is not handed back stays checked out for
-        good, and once that has happened POOL_SIZE times every later query
-        runs into "pool exhausted" instead of reaching the database.
-        """
-        connection = self._checkout(pool)
-        try:
-            # A pooled connection may have been closed by the server after
-            # wait_timeout, so verify it before the query runs.
-            connection.ping(reconnect=True, attempts=2, delay=1)
-            yield connection
-        finally:
-            with contextlib.suppress(Exception):
-                connection.close()
-
-    def _invalidate_pool(self, stale: MySQLConnectionPool | None = None) -> None:
-        """Drop the pool so the next query builds fresh connections.
-
-        When a pool is given it is only dropped while it is still the current
-        one. Sensors share the pool and fail together, so without that check
-        the thread that notices the outage second would tear down the pool the
-        first one just rebuilt, and the two would keep replacing each other's
-        connections until the database runs out of them.
-        """
-        with self._lock:
-            if stale is not None and stale is not self._pool:
-                return
-            pool, self._pool = self._pool, None
-        if pool is None:
-            return
-        # There is no public API to dispose of a pool, so failures here are
-        # ignored; dropping the reference is enough to stop using it.
-        with contextlib.suppress(Exception):
-            pool._remove_connections()  # noqa: SLF001
-
-    def execute(
+    async def execute(
         self, query: str, params: Sequence[Any] | None = None
     ) -> list[dict[str, Any]]:
-        """Run a query and return its rows. Blocking, run in an executor.
+        """Run a query and return its rows.
 
         ``params`` binds values to %s placeholders in ``query``: the driver
         quotes and escapes each one according to its type, so data passed
@@ -285,103 +279,82 @@ class MySQLConnectionManager:
         query is sent exactly as written, which also keeps a literal percent
         sign, such as in LIKE '%text%', from being misread as a placeholder.
         """
-        last_error: Exception | None = None
-
-        for attempt in range(1, MAX_QUERY_ATTEMPTS + 1):
-            pool: MySQLConnectionPool | None = None
-            try:
-                pool = self._get_pool()
-                with (
-                    self._connection(pool) as connection,
-                    contextlib.closing(
-                        connection.cursor(buffered=True, dictionary=True)
-                    ) as cursor,
-                ):
-                    cursor.execute(query, params)
-                    rows = cursor.fetchall() or []
-            except mysql_errors.PoolError as err:
-                # Every connection is in use and none came free in time. The
-                # pool itself is healthy, so it is kept.
-                last_error = err
-                _LOGGER.debug(
-                    "No free connection in the pool of %s (attempt %s)",
-                    self.target,
-                    attempt,
-                )
-            except _CONNECTION_ERRORS as err:
-                last_error = err
-                _LOGGER.debug(
-                    "Connection to %s failed (attempt %s): %s",
-                    self.target,
-                    attempt,
-                    err,
-                )
-                # The connection was already handed back by _connection, so
-                # the pool can be thrown away without losing one.
-                self._invalidate_pool(pool)
-            except mysql_errors.Error as err:
-                # Syntax errors, missing tables, denied privileges: retrying
-                # would only repeat the same failure.
-                raise MySQLQueryError(
-                    f"Query failed: {err}", getattr(err, "errno", None)
-                ) from err
-            else:
-                return [_convert_row(row) for row in rows]
-
-            if attempt < MAX_QUERY_ATTEMPTS:
-                time.sleep(RETRY_DELAY)
-
-        if isinstance(last_error, mysql_errors.PoolError):
+        connection: aiomysql.Connection | None = None
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT):
+                pool = await self._get_pool()
+                connection = await pool.acquire()
+                # The server can have dropped this connection while it sat
+                # idle in the pool (wait_timeout); reconnect instead of
+                # failing the query outright.
+                await connection.ping(reconnect=True)
+                async with connection.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(query, params)
+                    rows = await cursor.fetchall()
+        except TimeoutError as err:
+            if connection is not None:
+                # It may still have a query in flight on the wire; handing it
+                # back to the pool would let the next query read its
+                # leftovers, so it is dropped instead of released.
+                connection.close()
             raise MySQLConnectionError(
-                f"All {POOL_SIZE} connections to {self.target} are in use: "
-                f"{last_error}",
-                getattr(last_error, "errno", None),
-            )
+                f"Timed out reaching MySQL at {self.target}: {err}"
+            ) from err
+        except (pymysql_err.Error, OSError) as err:
+            if connection is not None:
+                connection.close()
+            raise _wrap_error(err, self.target) from err
+        else:
+            pool.release(connection)
+            return [_convert_row(row) for row in rows]
 
-        raise MySQLConnectionError(
-            f"Could not reach MySQL at {self.target}: {last_error}",
-            getattr(last_error, "errno", None),
-        )
+    async def test_connection(self) -> None:
+        """Verify the settings on a connection of their own.
 
-    def test_connection(self) -> None:
-        """Verify the settings on a single connection of its own.
-
-        Blocking, run in an executor. Raises MySQLConnectionError when the
-        server cannot be reached and MySQLQueryError when it refuses us.
+        Raises MySQLConnectionError when the server cannot be reached,
+        MySQLQueryError when it refuses us, and TLSUnavailableError when TLS
+        was requested but the server did not actually encrypt the session.
 
         This deliberately stays away from the pool. The check runs on every
         setup and on every submitted config flow, while building a pool opens
-        POOL_SIZE connections at once; doing that for one SELECT 1 is what
+        POOL_MAX_SIZE connections at once; doing that for one SELECT 1 is what
         pushed a busy server over its connection limit.
         """
         try:
-            connection = mysql.connector.connect(**self._db_config)
-        except _CONNECTION_ERRORS as err:
+            async with asyncio.timeout(QUERY_TIMEOUT):
+                connection = await aiomysql.connect(**self._connect_kwargs)
+        except TimeoutError as err:
             raise MySQLConnectionError(
-                f"Could not reach MySQL at {self.target}: {err}",
-                getattr(err, "errno", None),
+                f"Timed out reaching MySQL at {self.target}: {err}"
             ) from err
-        except mysql_errors.Error as err:
-            raise MySQLQueryError(
-                f"Query failed: {err}", getattr(err, "errno", None)
-            ) from err
+        except (pymysql_err.Error, OSError) as err:
+            raise _wrap_error(err, self.target) from err
 
         try:
-            with contextlib.closing(connection.cursor()) as cursor:
-                cursor.execute("SELECT 1")
-                cursor.fetchall()
-        except mysql_errors.Error as err:
-            raise MySQLQueryError(
-                f"Query failed: {err}", getattr(err, "errno", None)
+            async with asyncio.timeout(QUERY_TIMEOUT):
+                if self._use_tls:
+                    await _async_verify_tls(connection)
+                async with connection.cursor() as cursor:
+                    await cursor.execute("SELECT 1")
+                    await cursor.fetchall()
+        except TimeoutError as err:
+            raise MySQLConnectionError(
+                f"Timed out reaching MySQL at {self.target}: {err}"
             ) from err
+        except (pymysql_err.Error, OSError) as err:
+            raise _wrap_error(err, self.target) from err
         finally:
             # This connection is not pooled, so this really does close it.
-            with contextlib.suppress(Exception):
-                connection.close()
+            await connection.ensure_closed()
 
-    def close(self) -> None:
-        """Release every pooled connection. Blocking, run in an executor."""
-        self._invalidate_pool()
+    async def close(self) -> None:
+        """Release every pooled connection."""
+        async with self._pool_lock:
+            pool, self._pool = self._pool, None
+        if pool is None:
+            return
+        pool.close()
+        await pool.wait_closed()
 
 
 class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
@@ -414,10 +387,16 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
         # set_query restores the default.
         self.query_values: tuple[Any, ...] | None = None
 
-    def _fetch(self, query: str, values: tuple[Any, ...] | None) -> QueryResult:
-        """Execute the query and build the result. Runs in an executor."""
+    async def _async_update_data(self) -> QueryResult:
+        """Fetch the current result set."""
+        query = self.query
+        values = self.query_values
         now = dt_util.now()
-        rows = self._manager.execute(query, values)
+
+        try:
+            rows = await self._manager.execute(query, values)
+        except MySQLError as err:
+            raise UpdateFailed(str(err)) from err
 
         if not rows:
             return QueryResult(
@@ -462,12 +441,3 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
             query_date=now.strftime("%Y-%m-%d"),
             query_time=now.strftime("%H:%M:%S"),
         )
-
-    async def _async_update_data(self) -> QueryResult:
-        """Fetch the current result set."""
-        query = self.query
-        values = self.query_values
-        try:
-            return await self.hass.async_add_executor_job(self._fetch, query, values)
-        except MySQLError as err:
-            raise UpdateFailed(str(err)) from err

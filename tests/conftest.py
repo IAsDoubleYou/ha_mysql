@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from mysql.connector import errors as mysql_errors
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.ha_mysql.const import DOMAIN, POOL_SIZE
+from custom_components.ha_mysql.const import DOMAIN
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -39,6 +38,7 @@ CONNECTION = {
     "username": "user",
     "password": "secret",
     "database": "testdb",
+    "use_tls": False,
 }
 
 UNIQUE_ID = "db.local:3306/testdb"
@@ -68,57 +68,123 @@ ROWS = [
 ]
 
 
-class FakePool:
-    """A stand-in for the driver pool that keeps count of its connections.
+class FakeCursor:
+    """Stand-in for an aiomysql DictCursor.
 
-    Unlike a plain mock this refuses to hand out more connections than it
-    has, so a connection that is never given back shows up as an exhausted
-    pool instead of going unnoticed.
+    Only the surface the integration touches is implemented: it is an async
+    context manager that executes a statement and hands back prepared rows.
     """
 
     def __init__(
         self,
-        rows: list[dict] | None = None,
-        query_error: Exception | None = None,
-        ping_error: Exception | None = None,
-        size: int = POOL_SIZE,
+        *,
+        rows: Sequence[dict[str, Any]] | None = None,
+        status_row: tuple | None = None,
+        error: Exception | None = None,
+        on_execute: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
-        """Set up an idle pool of the given size."""
-        self.size = size
-        self.rows = rows if rows is not None else []
-        self.query_error = query_error
+        """Configure the result the cursor will report."""
+        self.rows = list(rows or [])
+        # Answered by SHOW STATUS LIKE 'Ssl_cipher', which reads a plain
+        # tuple cursor rather than a dict one.
+        self.status_row = status_row
+        self.error = error
+        self.on_execute = on_execute
+        self.executed: list[str] = []
+        self.executed_args: list[Any] = []
+        self.closed = False
+
+    async def execute(self, query: str, args: Any = None) -> None:
+        """Record the statement and raise the configured error, if any."""
+        self.executed.append(query)
+        self.executed_args.append(args)
+        if self.on_execute is not None:
+            await self.on_execute(query)
+        if self.error is not None:
+            raise self.error
+
+    async def fetchall(self) -> list[dict[str, Any]]:
+        """Return the prepared rows."""
+        return self.rows
+
+    async def fetchone(self) -> tuple | None:
+        """Return the prepared status row, for the TLS check."""
+        return self.status_row
+
+    async def close(self) -> None:
+        """Mark the cursor as closed."""
+        self.closed = True
+
+    async def __aenter__(self) -> FakeCursor:
+        """Enter the cursor context."""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        """Close the cursor on leaving the context."""
+        await self.close()
+        return False
+
+
+class FakeConnection:
+    """Stand-in for an aiomysql connection, pooled or standalone."""
+
+    def __init__(
+        self, cursor: FakeCursor | None = None, *, ping_error: Exception | None = None
+    ) -> None:
+        """Create a connection handing out ``cursor`` for every cursor call."""
+        self.cursor_obj = cursor if cursor is not None else FakeCursor()
         self.ping_error = ping_error
-        self.in_use = 0
-        self.peak_in_use = 0
-        self.removed = False
+        self.pings = 0
+        self.closed = False
+        self.ensure_closed_called = False
 
-    def get_connection(self) -> MagicMock:
-        """Hand out a connection, or report the pool as exhausted."""
-        if self.in_use >= self.size:
-            raise mysql_errors.PoolError("Failed getting connection; pool exhausted")
-        self.in_use += 1
-        self.peak_in_use = max(self.peak_in_use, self.in_use)
+    def cursor(self, *cursor_classes: type) -> FakeCursor:
+        """Return the prepared cursor; usable as an async context manager."""
+        return self.cursor_obj
 
-        cursor = MagicMock()
-        cursor.fetchall.return_value = self.rows
-        if self.query_error is not None:
-            cursor.execute.side_effect = self.query_error
-
-        connection = MagicMock()
-        connection.cursor.return_value = cursor
-        connection.close.side_effect = self._release
+    async def ping(self, reconnect: bool = True) -> None:
+        """Count the liveness checks the integration performs."""
+        self.pings += 1
         if self.ping_error is not None:
-            connection.ping.side_effect = self.ping_error
-        return connection
+            raise self.ping_error
 
-    def _release(self) -> None:
-        """Take a connection back, the way close() does on a pooled one."""
-        self.in_use -= 1
+    def close(self) -> None:
+        """Mark the connection as closed."""
+        self.closed = True
 
-    def _remove_connections(self) -> int:
-        """Record that the pool was thrown away."""
-        self.removed = True
-        return 0
+    async def ensure_closed(self) -> None:
+        """Mark a standalone connection as closed."""
+        self.ensure_closed_called = True
+        self.closed = True
+
+
+class FakePool:
+    """Stand-in for an aiomysql connection pool."""
+
+    def __init__(self, connection: FakeConnection | None = None) -> None:
+        """Create a pool that always hands out the same connection."""
+        self.connection = connection if connection is not None else FakeConnection()
+        self.acquired = 0
+        self.released = 0
+        self.closed = False
+        self.wait_closed_called = False
+
+    async def acquire(self) -> FakeConnection:
+        """Hand out the pooled connection."""
+        self.acquired += 1
+        return self.connection
+
+    def release(self, conn: FakeConnection) -> None:
+        """Take the connection back into the pool."""
+        self.released += 1
+
+    def close(self) -> None:
+        """Start closing the pool."""
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        """Wait until the pool finished closing."""
+        self.wait_closed_called = True
 
 
 def make_sensor(**overrides: Any) -> dict[str, Any]:
@@ -151,7 +217,7 @@ def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
 
 @pytest.fixture
 def mock_execute() -> Generator[Any]:
-    """Replace the blocking database calls with a mock.
+    """Replace the database calls with a mock.
 
     The connection check opens a connection of its own instead of borrowing
     one from the pool, so it is routed to the same mock: a test that makes the

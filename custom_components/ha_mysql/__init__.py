@@ -181,7 +181,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> b
     manager = MySQLConnectionManager(dict(entry.data))
 
     try:
-        await hass.async_add_executor_job(manager.test_connection)
+        await manager.test_connection()
     except MySQLQueryError as err:
         # Wrong credentials or a missing database will not fix themselves.
         raise ConfigEntryError(str(err)) from err
@@ -198,7 +198,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> 
     """Unload a MySQL connection and close its pooled connections."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        await hass.async_add_executor_job(entry.runtime_data.close)
+        await entry.runtime_data.close()
     return unloaded
 
 

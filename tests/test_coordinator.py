@@ -2,31 +2,34 @@
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
 from datetime import timedelta
 import decimal
 import json
+import ssl
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-from mysql.connector import errors as mysql_errors
+from pymysql import err as pymysql_err
 import pytest
 
-from .conftest import FakePool
+from .conftest import ROWS, FakeConnection, FakeCursor, FakePool
 from custom_components.ha_mysql.const import (
     BINARY_PREVIEW_BYTES,
     CONNECT_TIMEOUT,
-    POOL_ACQUIRE_INTERVAL,
-    POOL_SIZE,
-    READ_TIMEOUT,
-    WRITE_TIMEOUT,
+    POOL_MAX_SIZE,
+    POOL_MIN_SIZE,
+    POOL_RECYCLE_SECONDS,
 )
 from custom_components.ha_mysql.coordinator import (
+    _CONNECTIVITY_ERRNOS,
     MySQLConnectionError,
     MySQLConnectionManager,
     MySQLQueryError,
     QueryResult,
     QueryResultEncoder,
+    TLSUnavailableError,
+    _async_verify_tls,
     _convert_row,
 )
 
@@ -38,24 +41,19 @@ DB_CONFIG = {
     "database": "testdb",
 }
 
-CONNECT = "custom_components.ha_mysql.coordinator.mysql.connector.connect"
-POOL = "custom_components.ha_mysql.coordinator.MySQLConnectionPool"
-SLEEP = "custom_components.ha_mysql.coordinator.time.sleep"
+CREATE_POOL = "aiomysql.create_pool"
+CONNECT = "aiomysql.connect"
 
 
-def _pool_returning(rows: list[dict], side_effect: Exception | None = None):
-    """Build a fake connection pool that yields the given rows."""
-    cursor = MagicMock()
-    cursor.fetchall.return_value = rows
-    if side_effect is not None:
-        cursor.execute.side_effect = side_effect
+def _manager(**overrides: Any) -> MySQLConnectionManager:
+    """Return a connection manager for the test database."""
+    return MySQLConnectionManager({**DB_CONFIG, **overrides})
 
-    connection = MagicMock()
-    connection.cursor.return_value = cursor
 
-    pool = MagicMock()
-    pool.get_connection.return_value = connection
-    return pool, connection, cursor
+def _cursor(**kwargs: Any) -> FakeCursor:
+    """Return a cursor reporting the standard two-row result set."""
+    kwargs.setdefault("rows", [dict(row) for row in ROWS[:1]])
+    return FakeCursor(**kwargs)
 
 
 def test_convert_row_stringifies_decimals() -> None:
@@ -104,412 +102,368 @@ def test_query_result_row_count() -> None:
     assert QueryResult(rows=[{"a": 1}, {"a": 2}]).row_count == 2
 
 
-def test_execute_returns_rows() -> None:
+async def test_execute_returns_rows() -> None:
     """A successful query returns the converted rows."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool, connection, cursor = _pool_returning([{"a": decimal.Decimal("1.5")}])
+    manager = _manager()
+    pool = FakePool(FakeConnection(_cursor(rows=[{"a": decimal.Decimal("1.5")}])))
 
-    with patch(
-        "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
-        return_value=pool,
-    ):
-        assert manager.execute("SELECT 1") == [{"a": "1.5"}]
+    with patch(CREATE_POOL, AsyncMock(return_value=pool)):
+        assert await manager.execute("SELECT 1") == [{"a": "1.5"}]
 
-    cursor.execute.assert_called_once_with("SELECT 1", None)
-    cursor.close.assert_called_once()
-    # The connection is handed back to the pool.
-    connection.close.assert_called_once()
+    assert pool.connection.cursor_obj.executed == ["SELECT 1"]
+    assert pool.acquired == 1
+    assert pool.released == 1
 
 
-def test_execute_binds_params() -> None:
+async def test_execute_binds_params() -> None:
     """Values passed as params are handed to the driver, not the query text.
 
     This is what keeps a bound value from being able to change what the
     statement does: the driver quotes and escapes it instead of it becoming
     part of the SQL.
     """
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool, _, cursor = _pool_returning([])
+    manager = _manager()
+    pool = FakePool(FakeConnection(_cursor(rows=[])))
 
-    with patch(
-        "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
-        return_value=pool,
-    ):
-        manager.execute("SELECT * FROM emp WHERE id = %s", ("1; DROP TABLE emp",))
+    with patch(CREATE_POOL, AsyncMock(return_value=pool)):
+        await manager.execute("SELECT * FROM emp WHERE id = %s", ("1; DROP TABLE emp",))
 
-    cursor.execute.assert_called_once_with(
-        "SELECT * FROM emp WHERE id = %s", ("1; DROP TABLE emp",)
-    )
+    assert pool.connection.cursor_obj.executed_args == [("1; DROP TABLE emp",)]
 
 
-def test_execute_pings_before_use() -> None:
+async def test_execute_pings_before_use() -> None:
     """A pooled connection is verified before the query runs."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool, connection, _ = _pool_returning([])
+    manager = _manager()
+    connection = FakeConnection(_cursor(rows=[]))
+    pool = FakePool(connection)
 
-    with patch(
-        "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
-        return_value=pool,
-    ):
-        manager.execute("SELECT 1")
+    with patch(CREATE_POOL, AsyncMock(return_value=pool)):
+        await manager.execute("SELECT 1")
 
-    connection.ping.assert_called_once_with(reconnect=True, attempts=2, delay=1)
+    assert connection.pings == 1
 
 
-def test_execute_retries_after_lost_connection() -> None:
-    """A dropped connection rebuilds the pool and the query succeeds."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    broken_pool, _, _ = _pool_returning(
-        [], side_effect=mysql_errors.OperationalError("MySQL server has gone away")
-    )
-    healthy_pool, _, _ = _pool_returning([{"a": 1}])
+async def test_execute_builds_the_pool_once() -> None:
+    """Repeated calls reuse the pool instead of opening a new one each time."""
+    manager = _manager()
+    pool = FakePool(FakeConnection(_cursor(rows=[])))
+    create_pool = AsyncMock(return_value=pool)
 
-    with (
-        patch(
-            "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
-            side_effect=[broken_pool, healthy_pool],
-        ) as pool_factory,
-        patch("custom_components.ha_mysql.coordinator.time.sleep"),
-    ):
-        assert manager.execute("SELECT 1") == [{"a": 1}]
+    with patch(CREATE_POOL, create_pool):
+        for _ in range(3):
+            await manager.execute("SELECT 1")
 
-    # The stale pool was discarded and a fresh one was built.
-    assert pool_factory.call_count == 2
+    create_pool.assert_called_once()
+    assert pool.acquired == 3
+    assert pool.released == 3
 
 
-def test_execute_raises_connection_error_when_unreachable() -> None:
-    """A database that stays unreachable raises MySQLConnectionError."""
-    manager = MySQLConnectionManager(DB_CONFIG)
+async def test_pool_is_created_with_the_configured_settings() -> None:
+    """The pool is bounded, recycling, and built from the stored settings."""
+    manager = _manager()
+    create_pool = AsyncMock(return_value=FakePool(FakeConnection(_cursor(rows=[]))))
 
-    with (
-        patch(
-            "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
-            side_effect=mysql_errors.InterfaceError("Can't connect"),
-        ),
-        patch("custom_components.ha_mysql.coordinator.time.sleep"),
-        pytest.raises(MySQLConnectionError),
-    ):
-        manager.execute("SELECT 1")
+    with patch(CREATE_POOL, create_pool):
+        await manager.execute("SELECT 1")
 
-
-def test_execute_does_not_retry_bad_query() -> None:
-    """A rejected query fails immediately instead of being retried."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool, _, _ = _pool_returning(
-        [], side_effect=mysql_errors.ProgrammingError("You have an error in your SQL")
-    )
-
-    with (
-        patch(
-            "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
-            return_value=pool,
-        ) as pool_factory,
-        pytest.raises(MySQLQueryError),
-    ):
-        manager.execute("SELECT nonsense")
-
-    assert pool_factory.call_count == 1
-
-
-def test_execute_uses_autocommit() -> None:
-    """Autocommit is enabled so polls are not stuck on one snapshot."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool, _, _ = _pool_returning([])
-
-    with patch(
-        "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
-        return_value=pool,
-    ) as pool_factory:
-        manager.execute("SELECT 1")
-
-    assert pool_factory.call_args.kwargs["autocommit"] is True
-    assert pool_factory.call_args.kwargs["port"] == 3306
+    kwargs = create_pool.call_args.kwargs
+    assert kwargs["host"] == "db.local"
+    assert kwargs["port"] == 3306
+    assert kwargs["user"] == "user"
+    assert kwargs["password"] == "secret"
+    assert kwargs["db"] == "testdb"
+    assert kwargs["connect_timeout"] == CONNECT_TIMEOUT
+    assert kwargs["autocommit"] is True
+    assert kwargs["minsize"] == POOL_MIN_SIZE
+    assert kwargs["maxsize"] == POOL_MAX_SIZE
+    assert kwargs["pool_recycle"] == POOL_RECYCLE_SECONDS
+    assert "ssl" not in kwargs
 
 
 @pytest.mark.parametrize(
-    "failure",
-    [
-        mysql_errors.ProgrammingError("You have an error in your SQL"),
-        mysql_errors.OperationalError("MySQL server has gone away"),
-        mysql_errors.InterfaceError("Lost connection to MySQL server"),
-        RuntimeError("the driver exploded"),
-    ],
+    "errno",
+    sorted(_CONNECTIVITY_ERRNOS),
 )
-def test_execute_hands_the_connection_back_on_failure(failure: Exception) -> None:
-    """A failing query never keeps a connection checked out.
+async def test_execute_classifies_connectivity_errors(errno: int) -> None:
+    """A dropped socket, a timeout or too many connections is a connection error.
 
-    Repeating a failing query more often than the pool is large is what used
-    to drain the pool, after which every later query ran into a read timeout
-    instead of reaching the database.
+    The connection is dropped rather than handed back: it may still have a
+    query in flight on the wire, and a corrupted pooled connection would let
+    the next query read another statement's leftovers.
     """
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool(query_error=failure)
-
-    with patch(POOL, return_value=pool), patch(SLEEP):
-        for _ in range(POOL_SIZE * 2):
-            with contextlib.suppress(Exception):
-                manager.execute("SELECT 1")
-
-    assert pool.in_use == 0
-    # One query at a time never needs more than one connection.
-    assert pool.peak_in_use == 1
-
-
-def test_execute_hands_back_a_connection_that_fails_its_health_check() -> None:
-    """A connection that fails its ping goes back to the pool as well."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool(ping_error=mysql_errors.InterfaceError("Lost connection"))
+    manager = _manager()
+    connection = FakeConnection(
+        _cursor(error=pymysql_err.OperationalError(errno, "connection trouble"))
+    )
+    pool = FakePool(connection)
 
     with (
-        patch(POOL, return_value=pool),
-        patch(SLEEP),
-        pytest.raises(MySQLConnectionError),
-    ):
-        manager.execute("SELECT 1")
-
-    assert pool.in_use == 0
-
-
-def test_execute_hands_the_connection_back_after_success() -> None:
-    """Repeated successful queries keep reusing the same single connection."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool(rows=[{"a": 1}])
-
-    with patch(POOL, return_value=pool):
-        for _ in range(POOL_SIZE * 2):
-            assert manager.execute("SELECT 1") == [{"a": 1}]
-
-    assert pool.in_use == 0
-    assert pool.peak_in_use == 1
-
-
-def test_execute_waits_for_a_free_connection() -> None:
-    """A pool that is full for a moment is waited out, not given up on."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool(rows=[{"a": 1}])
-    pool.in_use = pool.size
-
-    waits: list[float] = []
-
-    def release(seconds: float) -> None:
-        """Let a connection come free while the wait is polled."""
-        waits.append(seconds)
-        pool.in_use = 0
-
-    with patch(POOL, return_value=pool), patch(SLEEP, side_effect=release):
-        assert manager.execute("SELECT 1") == [{"a": 1}]
-
-    assert waits == [POOL_ACQUIRE_INTERVAL]
-    assert pool.in_use == 0
-
-
-def test_execute_reports_a_full_pool_as_a_connection_error() -> None:
-    """A pool that stays full is reported as cannot_connect, and is kept.
-
-    The connections are in use by queries that are still running, so throwing
-    the pool away would pull them out from under those queries.
-    """
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool()
-    pool.in_use = pool.size
-
-    with (
-        patch(POOL, return_value=pool) as pool_factory,
-        patch("custom_components.ha_mysql.coordinator.POOL_ACQUIRE_TIMEOUT", 0),
-        patch(SLEEP),
+        patch(CREATE_POOL, AsyncMock(return_value=pool)),
         pytest.raises(MySQLConnectionError) as caught,
     ):
-        manager.execute("SELECT 1")
+        await manager.execute("SELECT 1")
 
-    assert "in use" in str(caught.value)
-    assert pool_factory.call_count == 1
-    assert pool.removed is False
+    assert caught.value.errno == errno
+    assert connection.closed is True
+    assert pool.released == 0
 
 
-def test_invalidate_pool_keeps_a_pool_that_was_just_rebuilt() -> None:
-    """A late failure does not tear down the pool another query rebuilt.
+@pytest.mark.parametrize("errno", [1045, 1044, 1049, 1064, 1146])
+async def test_execute_classifies_other_errors_as_query_errors(errno: int) -> None:
+    """A rejected login, a missing database or bad SQL is a query error.
 
-    Every sensor shares one pool and they fail together. Without this check
-    the sensor that noticed the outage second would close the connections the
-    first one had just opened, and the two would keep replacing each other's
-    pool until the database ran out of connections.
+    PyMySQL raises the very same OperationalError for these as it does for a
+    dropped socket, so the error code is what decides, not the exception type.
     """
-    manager = MySQLConnectionManager(DB_CONFIG)
-    stale, fresh = FakePool(), FakePool()
-
-    with patch(POOL, side_effect=[stale, fresh]):
-        assert manager._get_pool() is stale
-        manager._invalidate_pool(stale)
-        assert manager._get_pool() is fresh
-        # The second sensor reports the pool it was using, which by now has
-        # been replaced.
-        manager._invalidate_pool(stale)
-        assert manager._get_pool() is fresh
-
-    assert stale.removed is True
-    assert fresh.removed is False
-
-
-def test_close_drops_the_current_pool() -> None:
-    """Unloading the entry releases the pooled connections."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool()
-
-    with patch(POOL, return_value=pool):
-        manager.execute("SELECT 1")
-        manager.close()
-
-    assert pool.removed is True
-    assert pool.in_use == 0
-
-
-def test_test_connection_uses_a_single_connection() -> None:
-    """Checking the settings opens one connection and closes it again.
-
-    Going through the pool would open POOL_SIZE connections for one SELECT 1,
-    on every setup and on every submitted form.
-    """
-    manager = MySQLConnectionManager(DB_CONFIG)
-    connection = MagicMock()
+    manager = _manager()
+    connection = FakeConnection(
+        _cursor(error=pymysql_err.OperationalError(errno, "refused"))
+    )
+    pool = FakePool(connection)
 
     with (
-        patch(CONNECT, return_value=connection) as connect,
-        patch(POOL) as pool_factory,
+        patch(CREATE_POOL, AsyncMock(return_value=pool)),
+        pytest.raises(MySQLQueryError) as caught,
     ):
-        manager.test_connection()
+        await manager.execute("SELECT 1")
 
-    assert connect.call_args.kwargs["database"] == "testdb"
-    connection.cursor.return_value.execute.assert_called_once_with("SELECT 1")
-    connection.cursor.return_value.close.assert_called_once()
-    connection.close.assert_called_once()
-    pool_factory.assert_not_called()
+    assert caught.value.errno == errno
+    assert connection.closed is True
+    assert pool.released == 0
 
 
-def test_test_connection_closes_after_a_refused_query() -> None:
-    """A server that refuses the query still gets its connection back."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    connection = MagicMock()
-    connection.cursor.return_value.execute.side_effect = mysql_errors.ProgrammingError(
-        "Access denied", 1045
+async def test_execute_treats_a_bare_oserror_as_connectivity() -> None:
+    """A raw socket error, without a MySQL error code, is a connection error."""
+    manager = _manager()
+    connection = FakeConnection(_cursor(error=OSError("network unreachable")))
+    pool = FakePool(connection)
+
+    with (
+        patch(CREATE_POOL, AsyncMock(return_value=pool)),
+        pytest.raises(MySQLConnectionError),
+    ):
+        await manager.execute("SELECT 1")
+
+    assert connection.closed is True
+
+
+async def test_execute_reports_a_client_side_error_without_errno() -> None:
+    """An error with only a message, no code, is treated as connectivity."""
+    manager = _manager()
+    connection = FakeConnection(_cursor(error=pymysql_err.InterfaceError("(0, '')")))
+    pool = FakePool(connection)
+
+    with (
+        patch(CREATE_POOL, AsyncMock(return_value=pool)),
+        pytest.raises(MySQLConnectionError),
+    ):
+        await manager.execute("SELECT 1")
+
+
+async def test_execute_times_out_and_drops_the_connection() -> None:
+    """A query that never answers gives up instead of holding the pool hostage.
+
+    This is what a single asyncio.timeout() around the whole call replaces the
+    old read/write timeouts with: nothing here can block forever, and the
+    connection is dropped rather than returned in an unknown state.
+    """
+    manager = _manager()
+    connection = FakeConnection()
+    pool = FakePool(connection)
+
+    async def hang(*args: Any, **kwargs: Any) -> None:
+        await asyncio.sleep(3600)
+
+    connection.cursor_obj.execute = hang  # type: ignore[method-assign]
+
+    with (
+        patch(CREATE_POOL, AsyncMock(return_value=pool)),
+        patch("custom_components.ha_mysql.coordinator.QUERY_TIMEOUT", 0),
+        pytest.raises(MySQLConnectionError, match="Timed out"),
+    ):
+        await manager.execute("SELECT 1")
+
+    assert connection.closed is True
+    assert pool.released == 0
+
+
+async def test_execute_survives_a_pool_that_cannot_be_built() -> None:
+    """A pool that fails to open is reported instead of leaving a broken one."""
+    manager = _manager()
+
+    with (
+        patch(
+            CREATE_POOL,
+            AsyncMock(side_effect=pymysql_err.OperationalError(2003, "Can't connect")),
+        ),
+        pytest.raises(MySQLConnectionError),
+    ):
+        await manager.execute("SELECT 1")
+
+
+async def test_test_connection_uses_a_single_connection() -> None:
+    """Checking the settings opens one connection and closes it again.
+
+    Going through the pool would open POOL_MAX_SIZE connections for one
+    SELECT 1, on every setup and on every submitted form.
+    """
+    manager = _manager()
+    connection = FakeConnection(_cursor(rows=[]))
+    create_pool = AsyncMock()
+
+    with (
+        patch(CONNECT, AsyncMock(return_value=connection)) as connect,
+        patch(CREATE_POOL, create_pool),
+    ):
+        await manager.test_connection()
+
+    assert connect.call_args.kwargs["db"] == "testdb"
+    assert connection.cursor_obj.executed == ["SELECT 1"]
+    assert connection.ensure_closed_called is True
+    create_pool.assert_not_called()
+
+
+async def test_test_connection_closes_after_a_refused_query() -> None:
+    """A server that refuses the query still gets its connection closed."""
+    manager = _manager()
+    connection = FakeConnection(
+        _cursor(error=pymysql_err.ProgrammingError(1064, "Syntax error"))
     )
 
     with (
-        patch(CONNECT, return_value=connection),
+        patch(CONNECT, AsyncMock(return_value=connection)),
         pytest.raises(MySQLQueryError) as caught,
     ):
-        manager.test_connection()
+        await manager.test_connection()
 
-    assert caught.value.errno == 1045
-    connection.close.assert_called_once()
+    assert caught.value.errno == 1064
+    assert connection.ensure_closed_called is True
 
 
 @pytest.mark.parametrize(
     ("failure", "expected"),
     [
-        (mysql_errors.InterfaceError("Can't connect"), MySQLConnectionError),
-        (mysql_errors.OperationalError("Too many connections"), MySQLConnectionError),
-        (mysql_errors.ConnectionTimeoutError(errno=2003), MySQLConnectionError),
-        (mysql_errors.ReadTimeoutError(errno=3024), MySQLConnectionError),
-        (mysql_errors.ProgrammingError("Access denied", 1045), MySQLQueryError),
+        (pymysql_err.OperationalError(2003, "Can't connect"), MySQLConnectionError),
+        (
+            pymysql_err.OperationalError(1040, "Too many connections"),
+            MySQLConnectionError,
+        ),
+        (pymysql_err.OperationalError(1045, "Access denied"), MySQLQueryError),
+        (pymysql_err.OperationalError(1049, "Unknown database"), MySQLQueryError),
+        (pymysql_err.ProgrammingError(1064, "Syntax error"), MySQLQueryError),
     ],
 )
-def test_test_connection_reports_why_it_failed(
+async def test_test_connection_reports_why_it_failed(
     failure: Exception, expected: type[Exception]
 ) -> None:
     """An unreachable server and a refused login are told apart."""
-    manager = MySQLConnectionManager(DB_CONFIG)
+    manager = _manager()
 
-    with patch(CONNECT, side_effect=failure), pytest.raises(expected):
-        manager.test_connection()
+    with patch(CONNECT, AsyncMock(side_effect=failure)), pytest.raises(expected):
+        await manager.test_connection()
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [
-        mysql_errors.ConnectionTimeoutError(errno=2003),
-        mysql_errors.ReadTimeoutError(errno=3024),
-        mysql_errors.WriteTimeoutError(errno=3024),
-    ],
-)
-def test_execute_treats_a_timeout_as_a_connection_problem(failure: Exception) -> None:
-    """A driver timeout is a broken connection, not a rejected query.
+async def test_test_connection_times_out() -> None:
+    """A server that never answers the handshake is reported, not hung on."""
+    manager = _manager()
 
-    These three errors derive straight from Error, so unless they are named
-    they land on the branch for a query the server refused: the entry then
-    fails for good instead of retrying, and the pool keeps handing out
-    connections that will never answer again.
-    """
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool(query_error=failure)
+    async def hang(**kwargs: Any) -> None:
+        await asyncio.sleep(3600)
 
     with (
-        patch(POOL, return_value=pool),
-        patch(SLEEP),
-        pytest.raises(MySQLConnectionError),
+        patch(CONNECT, hang),
+        patch("custom_components.ha_mysql.coordinator.QUERY_TIMEOUT", 0),
+        pytest.raises(MySQLConnectionError, match="Timed out"),
     ):
-        manager.execute("SELECT 1")
-
-    assert pool.in_use == 0
-    # The pool was rebuilt rather than kept, so the dead connections are gone.
-    assert pool.removed is True
+        await manager.test_connection()
 
 
-def test_connections_bound_their_reads_and_writes() -> None:
-    """Every read and write is bounded, not only opening the connection.
+async def test_close_drops_the_current_pool() -> None:
+    """Unloading the entry releases the pooled connections."""
+    manager = _manager()
+    pool = FakePool(FakeConnection(_cursor(rows=[])))
 
-    The driver drops the connect timeout once the handshake is done, so
-    without this a read that never gets an answer holds on to its pooled
-    connection for good.
-    """
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool()
+    with patch(CREATE_POOL, AsyncMock(return_value=pool)):
+        await manager.execute("SELECT 1")
+        await manager.close()
 
-    with patch(POOL, return_value=pool) as pool_factory:
-        manager.execute("SELECT 1")
-
-    kwargs = pool_factory.call_args.kwargs
-    assert kwargs["connection_timeout"] == CONNECT_TIMEOUT
-    assert kwargs["read_timeout"] == READ_TIMEOUT
-    assert kwargs["write_timeout"] == WRITE_TIMEOUT
+    assert pool.closed is True
+    assert pool.wait_closed_called is True
 
 
-def test_connections_use_tls_when_the_server_offers_it() -> None:
-    """TLS is used when it is available, without demanding a certificate.
+async def test_close_without_a_pool_is_a_noop() -> None:
+    """Closing a manager that never built a pool does nothing."""
+    manager = _manager()
+    await manager.close()
+
+
+def test_tls_off_by_default() -> None:
+    """Without the option no context is built, so the driver never offers TLS."""
+    manager = _manager()
+    assert "ssl" not in manager._connect_kwargs
+
+
+def test_tls_builds_an_unverified_context() -> None:
+    """Turning the option on hands the driver a context that does not verify.
 
     A database on a home network nearly always has a self signed certificate,
-    so verifying it would lock out every existing setup. The settings are
-    spelled out so upgrading the driver cannot quietly change them.
+    so verification would make the option unusable.
     """
-    manager = MySQLConnectionManager(DB_CONFIG)
-    pool = FakePool()
+    manager = _manager(use_tls=True)
+    context = manager._connect_kwargs["ssl"]
 
-    with patch(POOL, return_value=pool) as pool_factory:
-        manager.execute("SELECT 1")
-
-    with patch(CONNECT) as connect:
-        manager.test_connection()
-
-    for kwargs in (pool_factory.call_args.kwargs, connect.call_args.kwargs):
-        assert kwargs["ssl_disabled"] is False
-        assert kwargs["ssl_verify_cert"] is False
-        assert kwargs["ssl_verify_identity"] is False
+    assert isinstance(context, ssl.SSLContext)
+    assert context.check_hostname is False
+    assert context.verify_mode is ssl.CERT_NONE
 
 
-def test_execute_survives_a_pool_that_cannot_be_built() -> None:
-    """A pool that fails to open is reported instead of leaving a broken one."""
-    manager = MySQLConnectionManager(DB_CONFIG)
-    calls: list[Any] = []
+async def test_verify_tls_accepts_an_encrypted_session() -> None:
+    """A session reporting a cipher passes the check."""
+    connection = FakeConnection(
+        FakeCursor(status_row=("Ssl_cipher", "TLS_AES_256_GCM_SHA384"))
+    )
 
-    def build(**kwargs: Any) -> FakePool:
-        calls.append(kwargs)
-        raise mysql_errors.InterfaceError("Can't connect")
+    await _async_verify_tls(connection)
+
+    assert connection.cursor_obj.executed == ["SHOW STATUS LIKE 'Ssl_cipher'"]
+
+
+@pytest.mark.parametrize("status_row", [("Ssl_cipher", ""), None])
+async def test_verify_tls_rejects_a_plain_text_session(
+    status_row: tuple | None,
+) -> None:
+    """An empty cipher means the server never encrypted the connection.
+
+    This is the case aiomysql does not report on its own: it skips the
+    handshake when the server does not advertise TLS and carries on in plain
+    text instead of raising anything.
+    """
+    connection = FakeConnection(FakeCursor(status_row=status_row))
+
+    with pytest.raises(TLSUnavailableError):
+        await _async_verify_tls(connection)
+
+
+async def test_test_connection_checks_tls_when_asked() -> None:
+    """The config flow path verifies the session it just opened."""
+    manager = _manager(use_tls=True)
+    connection = FakeConnection(FakeCursor(status_row=("Ssl_cipher", "")))
 
     with (
-        patch(POOL, side_effect=build),
-        patch(SLEEP),
-        pytest.raises(MySQLConnectionError),
+        patch(CONNECT, AsyncMock(return_value=connection)),
+        pytest.raises(TLSUnavailableError),
     ):
-        manager.execute("SELECT 1")
+        await manager.test_connection()
 
-    # Every attempt starts from scratch instead of reusing a half-built pool.
-    assert len(calls) == 2
+    assert connection.ensure_closed_called is True
+
+
+async def test_test_connection_skips_the_tls_check_when_off() -> None:
+    """Without the option the extra round trip is not made at all."""
+    manager = _manager()
+    connection = FakeConnection(FakeCursor(rows=[], status_row=("Ssl_cipher", "")))
+
+    with patch(CONNECT, AsyncMock(return_value=connection)):
+        await manager.test_connection()
+
+    assert connection.cursor_obj.executed == ["SELECT 1"]

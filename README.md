@@ -49,7 +49,7 @@ With `value_column: total`, `unit_of_measurement: kWh`, `device_class: energy` a
 |---|---|
 | Home Assistant | 2025.1 or newer |
 | Database | MySQL 5.7+ or MariaDB 10.3+ |
-| Driver | `mysql-connector-python` 9.7.0, installed automatically |
+| Driver | `aiomysql` 0.3.2, installed automatically |
 | Network | The database has to be reachable from the machine running Home Assistant |
 
 The integration only reads. A user with `SELECT` rights on the tables you query is enough:
@@ -121,8 +121,6 @@ A few things worth knowing:
 
 ### Connection options
 
-Used by both the user interface and `configuration.yaml`.
-
 | Option | Required | Default | Description |
 |---|---|---|---|
 | `host` | yes | | Host name or IP address of the database server |
@@ -130,6 +128,23 @@ Used by both the user interface and `configuration.yaml`.
 | `username` | yes | | User the queries run as |
 | `password` | yes | | Password of that user |
 | `database` | yes | | Default database for queries that do not name one themselves |
+| Encrypt the connection (TLS) | no | off | User interface only, see [Encrypting the connection](#encrypting-the-connection) |
+
+The first five are read from `configuration.yaml` as well. TLS is a user interface only option: a YAML-imported connection always starts unencrypted and can be turned on afterwards through *Change the database connection*.
+
+### Encrypting the connection
+
+By default the connection to the database is **not encrypted**. Turning on **Encrypt the connection (TLS)** makes the integration negotiate TLS when it connects.
+
+**What it does and does not protect.** The traffic is encrypted, so someone watching the network between Home Assistant and the database cannot read your queries or the password used to log in. The server's certificate is **not verified**, though — neither its signature nor its hostname — because a database on a home network nearly always carries a self signed one, and requiring a verifiable certificate would make this option unusable for most people. So this defends against passive eavesdropping, but not against an attacker who can actively intercept the connection and present a certificate of their own.
+
+**The server has to support it.** If the database has no TLS configured, the connection is refused with a clear message rather than quietly falling back to an unencrypted one; that silent fallback is what the driver does on its own, and it is exactly what this option exists to prevent. You can check what your server offers with:
+
+```sql
+SHOW GLOBAL VARIABLES LIKE 'have_ssl';
+```
+
+`YES` means TLS is available. `DISABLED` or `NO` means you need to configure a certificate on the database first, or leave this option off.
 
 ### Sensor options
 

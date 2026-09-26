@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-09-26
+
+The database driver has been replaced with `aiomysql`, the same async driver
+mysql_query already uses. This closes a gap where a query that stopped
+getting answers after connecting could hold onto its pooled connection
+forever, eventually exhausting the whole pool.
+
+### Added
+
+- **Encrypt the connection (TLS)**, a new connection option (off by default)
+  in both the initial setup and *Change the database connection*. When
+  enabled, the integration verifies the session was actually encrypted
+  instead of trusting the driver's silent fallback to plain text.
+
+### Changed
+
+- Replaced `mysql-connector-python` with `aiomysql` as the database driver.
+  All database calls are now natively asynchronous instead of running in
+  an executor thread.
+- The manual retry-with-pool-rebuild logic is gone; a dropped connection is
+  now recovered the same way mysql_query does it (a ping-based reconnect,
+  backed by the coordinator's own poll interval).
+- A single timeout now covers a whole query end to end — acquiring a pooled
+  connection, reconnecting it if needed, and running the statement — instead
+  of only bounding the initial handshake.
+
 ## [1.3.0] - 2026-09-25
 
 This release closes a SQL injection gap in `ha_mysql.set_query`, makes it
@@ -185,6 +211,7 @@ keep the entity IDs and the history they already had.
 See the [releases page](https://github.com/IAsDoubleYou/ha_mysql/releases) for
 the notes of 1.0.3 and older.
 
+[1.4.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.4.0
 [1.3.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.3.0
 [1.2.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.2.0
 [1.1.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.1.0

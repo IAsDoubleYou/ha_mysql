@@ -9,13 +9,15 @@
           "port": "Poort",
           "username": "Gebruikersnaam",
           "password": "Wachtwoord",
-          "database": "Database"
+          "database": "Database",
+          "use_tls": "Verbinding versleutelen (TLS)"
         },
         "data_description": {
           "host": "Hostnaam of IP-adres van de databaseserver.",
           "port": "Poort waarop de server luistert. Standaard is dat 3306.",
           "username": "Gebruiker waaronder de query's draaien. Leesrechten volstaan.",
-          "database": "Database voor query's die zelf geen database noemen."
+          "database": "Database voor query's die zelf geen database noemen.",
+          "use_tls": "Versleutelt het verkeer naar de database. De server moet TLS ondersteunen; de verbinding mislukt als dat niet zo is. Het certificaat van de server wordt niet gecontroleerd, dus dit beschermt tegen meelezen op het netwerk, niet tegen een server die zich voordoet als de jouwe. Standaard uit, zodat bestaande installaties blijven werken."
         }
       }
     },
@@ -23,7 +25,8 @@
       "cannot_connect": "De server is niet bereikbaar. Controleer de host, de poort en je firewall. Details: {error}",
       "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
       "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
-      "unknown": "Onverwachte fout bij het verbinden: {error}"
+      "unknown": "Onverwachte fout bij het verbinden: {error}",
+      "tls_unavailable": "De server accepteerde de verbinding, maar versleutelde deze niet. Configureer TLS op de database, of zet de versleutelingsoptie uit."
     },
     "abort": {
       "already_configured": "Deze database is al ingesteld."
@@ -48,13 +51,15 @@
           "port": "Poort",
           "username": "Gebruikersnaam",
           "password": "Wachtwoord",
-          "database": "Database"
+          "database": "Database",
+          "use_tls": "Verbinding versleutelen (TLS)"
         },
         "data_description": {
           "host": "Hostnaam of IP-adres van de databaseserver.",
           "port": "Poort waarop de server luistert. Standaard is dat 3306.",
           "username": "Gebruiker waaronder de query's draaien. Leesrechten volstaan.",
-          "database": "Database voor query's die zelf geen database noemen."
+          "database": "Database voor query's die zelf geen database noemen.",
+          "use_tls": "Versleutelt het verkeer naar de database. De server moet TLS ondersteunen; de verbinding mislukt als dat niet zo is. Het certificaat van de server wordt niet gecontroleerd, dus dit beschermt tegen meelezen op het netwerk, niet tegen een server die zich voordoet als de jouwe. Standaard uit, zodat bestaande installaties blijven werken."
         }
       },
       "add_sensor": {
@@ -127,7 +132,8 @@
       "cannot_connect": "De database is niet bereikbaar. Controleer de host, de poort en je firewall. Details: {error}",
       "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
       "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
-      "unknown": "Onverwachte fout: {error}"
+      "unknown": "Onverwachte fout: {error}",
+      "tls_unavailable": "De server accepteerde de verbinding, maar versleutelde deze niet. Configureer TLS op de database, of zet de versleutelingsoptie uit."
     },
     "abort": {
       "sensor_not_found": "Die sensor bestaat niet meer."

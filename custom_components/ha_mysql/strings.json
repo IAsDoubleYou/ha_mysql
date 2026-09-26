@@ -9,13 +9,15 @@
           "port": "Port",
           "username": "Username",
           "password": "Password",
-          "database": "Database"
+          "database": "Database",
+          "use_tls": "Encrypt the connection (TLS)"
         },
         "data_description": {
           "host": "Host name or IP address of the database server.",
           "port": "Port the server listens on. The default is 3306.",
           "username": "User the queries run as. Read only rights are enough.",
-          "database": "Database used for queries that do not name one themselves."
+          "database": "Database used for queries that do not name one themselves.",
+          "use_tls": "Encrypts the traffic to the database. The server must have TLS configured; the connection fails if it does not. The server certificate is not verified, so this protects against reading along on the network, not against a server impersonating yours. Off by default so existing setups keep working."
         }
       }
     },
@@ -23,7 +25,8 @@
       "cannot_connect": "Could not reach the server. Check the host, the port and your firewall. Details: {error}",
       "invalid_auth": "The server refused the username or password.",
       "unknown_database": "The database does not exist, or this user has no access to it.",
-      "unknown": "Unexpected error while connecting: {error}"
+      "unknown": "Unexpected error while connecting: {error}",
+      "tls_unavailable": "The server accepted the connection but did not encrypt it. Configure TLS on the database, or turn the encryption option off."
     },
     "abort": {
       "already_configured": "This database is already set up."
@@ -48,13 +51,15 @@
           "port": "Port",
           "username": "Username",
           "password": "Password",
-          "database": "Database"
+          "database": "Database",
+          "use_tls": "Encrypt the connection (TLS)"
         },
         "data_description": {
           "host": "Host name or IP address of the database server.",
           "port": "Port the server listens on. The default is 3306.",
           "username": "User the queries run as. Read only rights are enough.",
-          "database": "Database used for queries that do not name one themselves."
+          "database": "Database used for queries that do not name one themselves.",
+          "use_tls": "Encrypts the traffic to the database. The server must have TLS configured; the connection fails if it does not. The server certificate is not verified, so this protects against reading along on the network, not against a server impersonating yours. Off by default so existing setups keep working."
         }
       },
       "add_sensor": {
@@ -127,7 +132,8 @@
       "cannot_connect": "Could not reach the database. Check the host, the port and your firewall. Details: {error}",
       "invalid_auth": "The server refused the username or password.",
       "unknown_database": "The database does not exist, or this user has no access to it.",
-      "unknown": "Unexpected error: {error}"
+      "unknown": "Unexpected error: {error}",
+      "tls_unavailable": "The server accepted the connection but did not encrypt it. Configure TLS on the database, or turn the encryption option off."
     },
     "abort": {
       "sensor_not_found": "That sensor no longer exists."

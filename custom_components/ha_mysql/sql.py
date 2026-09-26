@@ -1,10 +1,9 @@
 """Classification of the SQL a sensor query or set_query call carries.
 
-The driver decides nothing here: mysql-connector-python turns on
-CLIENT.MULTI_STATEMENTS unconditionally and offers no way to turn it off, so
-"one statement, and only a reading one" has to be established before the
-statement is handed over. Everything in this module works on the text alone
-and never touches a connection.
+The driver decides nothing here: "one statement, and only a reading one" is
+established before the statement is ever handed to it, so this holds
+regardless of what the driver would otherwise allow. Everything in this
+module works on the text alone and never touches a connection.
 """
 
 from __future__ import annotations
@@ -241,10 +240,10 @@ def validate_read_only_query(query: str) -> str | None:
     import and the set_query action — runs a query through here before it is
     stored or executed.
 
-    Checking the statement count first matters: mysql-connector-python's
-    multi-statement support is always on, so "SELECT 1; DROP TABLE t" would
-    otherwise pass a check that only looks at the first keyword and then
-    run the second statement anyway.
+    Checking the statement count first matters: a check that only looks at
+    the first keyword would let "SELECT 1; DROP TABLE t" through, and a
+    driver whose multi-statement support is on would run the second
+    statement anyway.
     """
     statements = split_statements(query)
     if len(statements) != 1:

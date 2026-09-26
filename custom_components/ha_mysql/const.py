@@ -57,25 +57,26 @@ BINARY_PREVIEW_BYTES: Final = 32
 
 # Connection handling.
 CONNECT_TIMEOUT: Final = 10
-# The driver clears the connect timeout as soon as the handshake is done, which
-# leaves every later read and write on a socket that blocks forever. A query
-# that stops getting answers, because the route dropped or a firewall forgot
-# about the connection, would then hold on to its thread and its pooled
-# connection for good: the one leak that no try/finally can close. These bound
-# every read and write after connecting, so such a query gives up instead.
-READ_TIMEOUT: Final = 30
-WRITE_TIMEOUT: Final = 30
-# Number of connections shared by every sensor of one config entry. The driver
-# opens all of them when the pool is built and refuses anything above 32.
-POOL_SIZE: Final = 10
-MAX_QUERY_ATTEMPTS: Final = 2
-RETRY_DELAY: Final = 1.0
-# The pool of the driver has no blocking get: it reports "pool exhausted" the
-# moment every connection is in use. Sensors that happen to poll at the same
-# second would fail on that, so the wait for a free connection is polled here
-# until POOL_ACQUIRE_TIMEOUT seconds have passed.
-POOL_ACQUIRE_TIMEOUT: Final = 5.0
-POOL_ACQUIRE_INTERVAL: Final = 0.1
+# Bounds a whole execute() call: acquiring a pooled connection, reconnecting
+# it if the server dropped it while idle, running the query and fetching the
+# rows. Without this a query that stops getting answers, because the route
+# dropped or a firewall forgot about the connection, would hold on to its
+# pooled connection for good, and once that has happened POOL_MAX_SIZE times
+# every later query would fail on an exhausted pool instead of reaching the
+# database.
+QUERY_TIMEOUT: Final = 30
+# Number of connections shared by every sensor of one config entry.
+POOL_MIN_SIZE: Final = 1
+POOL_MAX_SIZE: Final = 10
+# Drop and rebuild a pooled connection after this many seconds, so it is never
+# handed out after the server closed it on its own wait_timeout.
+POOL_RECYCLE_SECONDS: Final = 3600
+
+# TLS.
+CONF_USE_TLS: Final = "use_tls"
+# Off by default so existing setups keep working: a database on a home
+# network usually has no certificate configured at all.
+DEFAULT_USE_TLS: Final = False
 
 # Services.
 SERVICE_SET_QUERY: Final = "set_query"

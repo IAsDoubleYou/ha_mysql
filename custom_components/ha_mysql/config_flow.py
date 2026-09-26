@@ -24,6 +24,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -50,15 +51,22 @@ from .const import (
     CONF_STATE_CLASS,
     CONF_SUGGESTED_DISPLAY_PRECISION,
     CONF_UNIQUE_ID,
+    CONF_USE_TLS,
     CONF_VALUE_COLUMN,
     CONF_VALUE_TEMPLATE,
     DEFAULT_MAX_JSON_ROWS,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL_SECONDS,
+    DEFAULT_USE_TLS,
     DOMAIN,
     SOURCE_YAML,
 )
-from .coordinator import MySQLConnectionError, MySQLConnectionManager, MySQLQueryError
+from .coordinator import (
+    MySQLConnectionError,
+    MySQLConnectionManager,
+    MySQLQueryError,
+    TLSUnavailableError,
+)
 from .sql import validate_read_only_query
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,6 +95,7 @@ CONNECTION_SCHEMA = vol.Schema(
             TextSelectorConfig(type=TextSelectorType.PASSWORD)
         ),
         vol.Required(CONF_MYSQL_DATABASE): TextSelector(),
+        vol.Required(CONF_USE_TLS, default=DEFAULT_USE_TLS): BooleanSelector(),
     }
 )
 
@@ -218,7 +227,11 @@ async def _async_validate_connection(
     """
     manager = MySQLConnectionManager(connection)
     try:
-        await hass.async_add_executor_job(manager.test_connection)
+        await manager.test_connection()
+    except TLSUnavailableError as err:
+        # The settings themselves are fine; the server just did not encrypt.
+        _LOGGER.debug("TLS requested but not established: %s", err)
+        return "tls_unavailable", ""
     except MySQLQueryError as err:
         if err.errno == _ERRNO_ACCESS_DENIED:
             return "invalid_auth", ""
@@ -262,6 +275,7 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_MYSQL_USERNAME: user_input[CONF_MYSQL_USERNAME],
                 CONF_MYSQL_PASSWORD: user_input[CONF_MYSQL_PASSWORD],
                 CONF_MYSQL_DATABASE: user_input[CONF_MYSQL_DATABASE].strip(),
+                CONF_USE_TLS: user_input.get(CONF_USE_TLS, DEFAULT_USE_TLS),
             }
 
             await self.async_set_unique_id(_connection_id(connection))
@@ -352,7 +366,7 @@ class HAMySQLOptionsFlow(OptionsFlow):
             manager = MySQLConnectionManager(dict(self.config_entry.data))
 
         try:
-            rows = await self.hass.async_add_executor_job(manager.execute, query)
+            rows = await manager.execute(query)
         except MySQLQueryError as err:
             _LOGGER.debug("Test run of %s failed: %s", query, err)
             return _QueryCheck(error="query_failed", message=_error_detail(err))
@@ -363,7 +377,7 @@ class HAMySQLOptionsFlow(OptionsFlow):
             return _QueryCheck(error="unknown", message=_error_detail(err))
         finally:
             if not borrowed:
-                await self.hass.async_add_executor_job(manager.close)
+                await manager.close()
 
         return _QueryCheck(row_count=len(rows))
 
@@ -418,6 +432,7 @@ class HAMySQLOptionsFlow(OptionsFlow):
                 CONF_MYSQL_USERNAME: user_input[CONF_MYSQL_USERNAME],
                 CONF_MYSQL_PASSWORD: user_input[CONF_MYSQL_PASSWORD],
                 CONF_MYSQL_DATABASE: user_input[CONF_MYSQL_DATABASE].strip(),
+                CONF_USE_TLS: user_input.get(CONF_USE_TLS, DEFAULT_USE_TLS),
             }
 
             error, detail = await _async_validate_connection(self.hass, connection)

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -14,6 +15,7 @@ from .conftest import (
     CONNECTION,
     SENSOR,
     UNIQUE_ID,
+    FakeConnection,
     FakePool,
     make_entry,
     make_sensor,
@@ -432,24 +434,24 @@ async def test_options_add_sensor_cannot_connect(
 
 
 async def test_options_add_sensor_with_a_full_pool(hass: HomeAssistant) -> None:
-    """A pool without a free connection is reported as cannot_connect.
+    """A pool that never hands out a connection is reported as cannot_connect.
 
     The real connection manager runs here, so this covers the whole path from
-    the driver reporting an exhausted pool to the message under the form.
+    a stuck pool.acquire() to the message under the form.
     """
-    pool = FakePool()
+    pool = FakePool(FakeConnection())
+
+    async def never_acquire() -> FakeConnection:
+        await asyncio.sleep(3600)
+        raise AssertionError("should not be reached")
 
     with (
         patch(
             "custom_components.ha_mysql.coordinator.MySQLConnectionManager"
             ".test_connection"
         ),
-        patch(
-            "custom_components.ha_mysql.coordinator.MySQLConnectionPool",
-            return_value=pool,
-        ),
-        patch("custom_components.ha_mysql.coordinator.POOL_ACQUIRE_TIMEOUT", 0),
-        patch("custom_components.ha_mysql.coordinator.time.sleep"),
+        patch("aiomysql.create_pool", AsyncMock(return_value=pool)),
+        patch("custom_components.ha_mysql.coordinator.QUERY_TIMEOUT", 0),
     ):
         entry = make_entry([])
         await setup_entry(hass, entry)
@@ -459,18 +461,15 @@ async def test_options_add_sensor_with_a_full_pool(hass: HomeAssistant) -> None:
             result["flow_id"], {"next_step_id": "add_sensor"}
         )
 
-        # Every connection is handed out and none of them comes free.
-        pool.in_use = pool.size
+        pool.acquire = never_acquire  # type: ignore[method-assign]
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], NEW_SENSOR
         )
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
-    assert "in use" in result["description_placeholders"]["error"]
+    assert "Timed out" in result["description_placeholders"]["error"]
     assert entry.options["sensors"] == []
-    # The pool survives, so the queries still using it are left alone.
-    assert pool.removed is False
 
 
 async def test_options_add_sensor_unexpected_error(
