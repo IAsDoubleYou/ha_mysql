@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-09-28
+
+### Fixed
+
+- A connection fixed through **Configure → Change the database connection** could be silently reverted back to a stale `configuration.yaml` on the next restart, if the `ha_mysql:` block was still present there. The connection is now only taken from YAML the first time it creates the entry; every later restart leaves the entry's connection exactly as configured through the user interface, and only its sensor list still follows `configuration.yaml` (unchanged). A warning is logged when this happens, naming the entry and pointing at removing the YAML connection block.
+
 ## [1.4.0] - 2026-09-26
 
 The database driver has been replaced with `aiomysql`, the same async driver

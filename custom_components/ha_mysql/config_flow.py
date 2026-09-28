@@ -302,8 +302,15 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
         """Import the settings from configuration.yaml.
 
-        This runs on every restart, so the entry keeps following the YAML file.
-        Sensors that were added through the user interface are left alone.
+        This runs on every restart, so the sensor list keeps following the
+        YAML file (sensors added through the user interface are left alone).
+        The connection itself is only taken from YAML the first time this
+        entry is created: on every later restart the existing entry's
+        connection is left exactly as configured, so a correction made
+        through Change the database connection is never silently reverted
+        by a configuration.yaml the user forgot to update or remove - which
+        is also why "the new connection ... replaces the old one" in the
+        README's description of that options step is actually true.
         """
         connection = import_data[CONF_CONNECTION]
         yaml_sensors = import_data[CONF_SENSORS]
@@ -322,8 +329,18 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
             ]
             self.hass.config_entries.async_update_entry(
                 entry,
-                data=connection,
                 options={CONF_SENSORS: [*yaml_sensors, *kept]},
+            )
+            _LOGGER.warning(
+                "ha_mysql: the connection settings in configuration.yaml for "
+                "%s are only used the first time this integration starts. "
+                "This entry already exists, so its connection was left as "
+                "configured through the user interface; only its sensor list "
+                "still follows configuration.yaml. Remove the host/port/"
+                "username/password/database keys from configuration.yaml, or "
+                "keep them in sync manually - Home Assistant will not do it "
+                "for you and will not warn you again if they drift apart.",
+                self.unique_id,
             )
             return self.async_abort(reason="already_configured")
 

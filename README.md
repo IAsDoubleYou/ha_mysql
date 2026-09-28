@@ -92,7 +92,7 @@ Every connection becomes one device, with all its sensors underneath it. Sensors
 
 ## Configuration through `configuration.yaml`
 
-YAML keeps working. On every start the settings are read and written into the integration, so `configuration.yaml` stays the source of truth for the sensors defined there. Sensors you added through the user interface are left untouched.
+YAML keeps working, for the connection's *sensors* specifically: on every start, `configuration.yaml` stays the source of truth for the sensors defined there, and sensors you added through the user interface are left untouched. The `ha_mysql:` connection block itself (host, port, username, password, database) is only read the first time it creates the entry; after that, the entry's connection is yours to manage through **Configure → Change the database connection**, and `configuration.yaml` is not read again for it - so a password rotated through the interface is never silently reverted by a file you forgot to update.
 
 ```yaml
 ha_mysql:

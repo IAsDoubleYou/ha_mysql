@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -151,6 +153,32 @@ async def test_yaml_refreshes_existing_entry(hass: HomeAssistant, mock_execute) 
     sensors = entry.options["sensors"]
     assert len(sensors) == 1
     assert sensors[0]["query"] == "SELECT * FROM emp WHERE active = 1"
+
+
+async def test_yaml_import_does_not_revert_a_connection_fixed_through_the_ui(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A stale configuration.yaml never reverts a connection fixed via Configure.
+
+    Regression test: an entry's connection used to be re-imported from YAML
+    on every restart, so correcting a wrong password through Change the
+    database connection was silently undone the next time Home Assistant
+    started while the old value was still sitting in configuration.yaml.
+    """
+    entry = MockConfigEntry(
+        domain="ha_mysql",
+        title="testdb @ db.local",
+        data={**CONNECTION, "password": "corrected-through-the-ui"},
+        options={"sensors": [make_sensor()]},
+        unique_id=UNIQUE_ID,
+    )
+    await setup_entry(hass, entry)
+
+    # CONFIG's password ("secret") is now stale compared to the entry's.
+    await _import_yaml(hass)
+
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+    assert entry.data["password"] == "corrected-through-the-ui"
 
 
 async def test_yaml_import_keeps_ui_sensors(hass: HomeAssistant, mock_execute) -> None:
