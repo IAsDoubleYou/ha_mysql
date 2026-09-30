@@ -15,6 +15,11 @@ set_query:
       example: "[1]"
       selector:
         object:
+    persist:
+      required: false
+      default: false
+      selector:
+        boolean:
 
 select_record:
   target:

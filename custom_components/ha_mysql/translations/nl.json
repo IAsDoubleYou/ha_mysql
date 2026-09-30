@@ -151,6 +151,10 @@
         "values": {
           "name": "Values",
           "description": "Optionele lijst met waarden voor de %s-placeholders in de query, in de volgorde waarin ze voorkomen. Wordt los van de querytekst doorgegeven, zodat de database ze escaped in plaats van dat ze onderdeel worden van de statement. Vereist een nieuwe query in dezelfde aanroep."
+        },
+        "persist": {
+          "name": "Blijvend opslaan",
+          "description": "Slaat deze query (en de waarden) op, zodat een herstart deze opnieuw uitvoert via de normale polling van de sensor, in plaats van terug te vallen op de geconfigureerde query van de sensor. Terugzetten naar de geconfigureerde query verwijdert altijd een eerder opgeslagen query, ongeacht deze instelling."
         }
       }
     },

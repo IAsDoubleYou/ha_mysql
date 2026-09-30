@@ -351,6 +351,91 @@ async def test_set_query_without_query_restores_default(
     )
 
 
+async def test_set_query_with_persist_survives_a_reload(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A persisted query is re-run automatically after the entry reloads."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+    original_options = dict(entry.options)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_QUERY,
+        {
+            "entity_id": ENTITY_ID,
+            "query": "SELECT * FROM emp WHERE id = %s",
+            "values": [1],
+            "persist": True,
+        },
+        blocking=True,
+    )
+
+    # persist never touches the config entry itself, so it never triggers
+    # the reload a real options change would.
+    assert entry.options == original_options
+
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert (
+        hass.states.get(ENTITY_ID).attributes["executed_sql_query"]
+        == "SELECT * FROM emp WHERE id = %s"
+    )
+
+
+async def test_set_query_without_persist_does_not_survive_a_reload(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Without persist, a reload falls back to the configured query again."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_QUERY,
+        {"entity_id": ENTITY_ID, "query": "SELECT 1 FROM DUAL"},
+        blocking=True,
+    )
+
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert (
+        hass.states.get(ENTITY_ID).attributes["executed_sql_query"]
+        == "SELECT * FROM emp"
+    )
+
+
+async def test_resetting_the_query_drops_a_persisted_override(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Resetting to the configured query also forgets a persisted override."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_QUERY,
+        {"entity_id": ENTITY_ID, "query": "SELECT 1 FROM DUAL", "persist": True},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_QUERY,
+        {"entity_id": ENTITY_ID, "query": ""},
+        blocking=True,
+    )
+
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert (
+        hass.states.get(ENTITY_ID).attributes["executed_sql_query"]
+        == "SELECT * FROM emp"
+    )
+
+
 async def test_set_query_binds_values(hass: HomeAssistant, mock_execute) -> None:
     """Values passed with a new query are bound to its %s placeholders."""
     await setup_entry(hass, make_entry())

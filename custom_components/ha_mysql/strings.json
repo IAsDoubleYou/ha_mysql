@@ -151,6 +151,10 @@
         "values": {
           "name": "Values",
           "description": "Optional list of values for the %s placeholders in the query, in the order the placeholders appear. Bound separately from the query text, so the database escapes them instead of them being part of the statement. Requires a new query in the same call."
+        },
+        "persist": {
+          "name": "Persist",
+          "description": "Save this query (and its values) so a restart re-runs it through the sensor's normal polling instead of falling back to the sensor's configured query. Resetting to the configured query always drops a previously persisted one, whether or not this is set."
         }
       }
     },

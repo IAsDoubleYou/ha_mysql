@@ -330,6 +330,7 @@ Replaces the query of a sensor and refreshes it right away. Only a single, readi
 | `entity_id` | yes | The sensor or sensors to change |
 | `query` | no | The query to run from now on. Leave it out, or empty, to restore the query from the configuration |
 | `values` | no | List of values for the `%s` placeholders in `query`, in the order they appear. Requires a new `query` in the same call — see [Parameterized queries](#parameterized-queries-with-values) |
+| `persist` | no | Save this query (and its `values`) so a restart re-runs it through the sensor's normal polling, instead of falling back to the query configured for the sensor. Off by default |
 
 ```yaml
 action: ha_mysql.set_query
@@ -339,7 +340,22 @@ data:
   query: SELECT 'Hello Friends' FROM DUAL
 ```
 
-The replacement lasts until it is replaced again, or until Home Assistant restarts. The selected row is reset to the first one. The query that is currently active is always available as the `executed_sql_query` attribute, so it can be read back and reused with new `values` later.
+By default the replacement lasts until it is replaced again, or until Home Assistant restarts — at which point the sensor goes back to running the query from its own configuration. Add `persist: true` to keep the replacement across a restart too:
+
+```yaml
+action: ha_mysql.set_query
+target:
+  entity_id: sensor.last_caller
+data:
+  query: SELECT announcement FROM contact WHERE phonenumber = %s
+  values:
+    - "{{ trigger.event.data.phonenumber }}"
+  persist: true
+```
+
+This is what makes a sensor built purely to display the result of a runtime lookup - like the one above, whose own configured query is a placeholder that matches nothing - show the last real result again after a restart, instead of that placeholder's empty one. Restoring the configured query (`query` left out or empty) always drops a persisted replacement too, whether `persist` was used or not.
+
+The selected row is reset to the first one. The query that is currently active is always available as the `executed_sql_query` attribute, so it can be read back and reused with new `values` later.
 
 ### Parameterized queries with `values`
 

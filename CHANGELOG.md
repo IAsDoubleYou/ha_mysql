@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-09-30
+
+### Added
+
+- `ha_mysql.set_query` gained a `persist` option. When set, the replacement query (and its `values`) is saved so a restart re-runs it through the sensor's normal polling instead of falling back to the query configured for the sensor - useful for a sensor whose own configured query is only ever a placeholder, built purely to display the result of a runtime lookup. Off by default, and never persisted to the config entry itself, so it never triggers a reload of the connection and its other sensors the way an options change would. Restoring the configured query always drops a persisted replacement too, whether `persist` was used to set it or not.
+
 ## [1.4.1] - 2026-09-28
 
 ### Fixed

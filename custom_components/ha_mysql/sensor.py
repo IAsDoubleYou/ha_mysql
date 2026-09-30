@@ -30,6 +30,7 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.template import Template
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType, StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -39,6 +40,7 @@ from .const import (
     ATTR_EXECUTED_QUERY,
     ATTR_JSON_RESULT,
     ATTR_JSON_TRUNCATED,
+    ATTR_PERSIST,
     ATTR_QUERY_DATE,
     ATTR_QUERY_TIME,
     ATTR_ROW_COUNT,
@@ -69,6 +71,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+STORAGE_VERSION = 1
+
 SET_QUERY_SCHEMA = {
     vol.Optional(CONF_QUERY): cv.string,
     # Values bound to the %s placeholders of query. Only scalars are
@@ -78,10 +82,22 @@ SET_QUERY_SCHEMA = {
     vol.Optional(ATTR_VALUES): vol.All(
         cv.ensure_list, [vol.Any(None, bool, int, float, str)]
     ),
+    vol.Optional(ATTR_PERSIST, default=False): cv.boolean,
 }
 SELECT_RECORD_SCHEMA = {
     vol.Required(CONF_ROWNUMBER): vol.All(vol.Coerce(int), vol.Range(min=0))
 }
+
+
+def _query_store(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> Store:
+    """Return the store holding this entry's persisted set_query overrides.
+
+    Deliberately separate from the config entry's own options: writing here
+    never triggers the entry's update listener, so a persisted set_query
+    call - which can happen far more often than a real options change -
+    never reloads the whole connection and every sensor under it.
+    """
+    return Store(hass, STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}_queries")
 
 
 async def async_setup_platform(
@@ -113,12 +129,22 @@ async def async_setup_entry(
     sensors: list[dict[str, Any]] = entry.options.get(CONF_SENSORS, [])
     _async_cleanup_registry(hass, entry, sensors)
 
+    store = _query_store(hass, entry)
+    persisted: dict[str, dict[str, Any]] = await store.async_load() or {}
+
     entities: list[HAMySQLSensor] = []
     for sensor_config in sensors:
         coordinator = MySQLQueryCoordinator(
             hass, entry, entry.runtime_data, sensor_config
         )
-        entities.append(HAMySQLSensor(coordinator, entry, sensor_config))
+        if saved := persisted.get(sensor_config[CONF_UNIQUE_ID]):
+            coordinator.query = saved[CONF_QUERY]
+            coordinator.query_values = (
+                tuple(saved[ATTR_VALUES]) if saved.get(ATTR_VALUES) else None
+            )
+        entities.append(
+            HAMySQLSensor(coordinator, entry, sensor_config, persisted, store)
+        )
 
     # A single failing query should not keep the other sensors from loading,
     # so failures are left to the coordinator instead of raising here.
@@ -174,12 +200,16 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         coordinator: MySQLQueryCoordinator,
         entry: HAMySQLConfigEntry,
         config: dict[str, Any],
+        persisted_queries: dict[str, dict[str, Any]],
+        store: Store,
     ) -> None:
         """Initialise the sensor from its stored configuration."""
         super().__init__(coordinator)
         self._selected_row = 0
         self._warned_missing_column = False
         self._warned_bad_value = False
+        self._persisted_queries = persisted_queries
+        self._store = store
 
         self._attr_name = config[CONF_NAME]
         self._attr_unique_id = config[CONF_UNIQUE_ID]
@@ -344,7 +374,10 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         return attributes
 
     async def async_set_query(
-        self, query: str | None = None, values: list[Any] | None = None
+        self,
+        query: str | None = None,
+        values: list[Any] | None = None,
+        persist: bool = False,
     ) -> None:
         """Replace the query of this sensor and refresh it immediately.
 
@@ -353,6 +386,15 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         refused: the default query was not written with placeholders in
         mind, and the current query is always available to pass back in here,
         as the executed_sql_query attribute.
+
+        persist saves the new query (and its bound values) so a restart
+        re-runs it through the sensor's normal poll cycle instead of falling
+        back to the query configured for the sensor - useful for a sensor
+        that exists only to look something up at runtime and display the
+        result, with nothing meaningful configured as its own query.
+        Resetting to the configured query always drops any such saved
+        override too, persist or not, since keeping it around would silently
+        undo the reset on the next restart.
         """
         if not query:
             if values:
@@ -362,12 +404,24 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
                 )
             self.coordinator.query = self.coordinator.default_query
             self.coordinator.query_values = None
+            if self._persisted_queries.pop(self._attr_unique_id, None) is not None:
+                await self._store.async_save(self._persisted_queries)
         else:
             query = query.strip()
             if (error := validate_read_only_query(query)) is not None:
                 raise ServiceValidationError(ERROR_MESSAGES[error])
             self.coordinator.query = query
             self.coordinator.query_values = render_values(self.hass, values)
+            if persist:
+                self._persisted_queries[self._attr_unique_id] = {
+                    CONF_QUERY: self.coordinator.query,
+                    ATTR_VALUES: (
+                        list(self.coordinator.query_values)
+                        if self.coordinator.query_values
+                        else None
+                    ),
+                }
+                await self._store.async_save(self._persisted_queries)
 
         self._selected_row = 0
         _LOGGER.debug("New query for %s: %s", self.entity_id, self.coordinator.query)
