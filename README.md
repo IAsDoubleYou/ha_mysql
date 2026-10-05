@@ -47,7 +47,7 @@ With `value_column: total`, `unit_of_measurement: kWh`, `device_class: energy` a
 
 | | |
 |---|---|
-| Home Assistant | 2025.1 or newer |
+| Home Assistant | 2026.3.0 or newer |
 | Database | MySQL 5.7+ or MariaDB 10.3+ |
 | Driver | `aiomysql` 0.3.2, installed automatically |
 | Network | The database has to be reachable from the machine running Home Assistant |

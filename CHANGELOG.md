@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-10-05
+
+### Changed
+
+- **Minimum Home Assistant version is now 2026.3.0**, declared in `hacs.json` (previously 2025.1.0). Home Assistant moved to Python 3.14 with that release; the code base now targets Python 3.14 and CI runs on it. HACS refuses to download this version on an older Home Assistant, which stays on the previous release.
+- Test suite: use `async_get_device_by_identifier`, as `async_get_device` is deprecated in current Home Assistant.
+
 ## [1.5.0] - 2026-09-30
 
 ### Added
