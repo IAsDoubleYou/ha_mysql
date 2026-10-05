@@ -320,7 +320,7 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         if self._numeric:
             try:
                 return float(value)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 if not self._warned_bad_value:
                     self._warned_bad_value = True
                     _LOGGER.error(

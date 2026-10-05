@@ -68,8 +68,8 @@ async def test_sensor_is_linked_to_a_device(hass: HomeAssistant, mock_execute) -
     config_entry = make_entry()
     await setup_entry(hass, config_entry)
 
-    device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, config_entry.entry_id)}
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, config_entry.entry_id), config_entry.entry_id
     )
     assert device is not None
     assert device.name == "testdb @ db.local"
