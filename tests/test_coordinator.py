@@ -187,9 +187,10 @@ async def test_pool_is_created_with_the_configured_settings() -> None:
 async def test_execute_classifies_connectivity_errors(errno: int) -> None:
     """A dropped socket, a timeout or too many connections is a connection error.
 
-    The connection is dropped rather than handed back: it may still have a
-    query in flight on the wire, and a corrupted pooled connection would let
-    the next query read another statement's leftovers.
+    The connection is closed rather than reused: it may still have a query in
+    flight on the wire, and a corrupted pooled connection would let the next
+    query read another statement's leftovers. It still goes back through
+    release(), which is what frees its slot in the pool.
     """
     manager = _manager()
     connection = FakeConnection(
@@ -205,7 +206,7 @@ async def test_execute_classifies_connectivity_errors(errno: int) -> None:
 
     assert caught.value.errno == errno
     assert connection.closed is True
-    assert pool.released == 0
+    assert pool.released == 1
 
 
 @pytest.mark.parametrize("errno", [1045, 1044, 1049, 1064, 1146])
@@ -229,7 +230,7 @@ async def test_execute_classifies_other_errors_as_query_errors(errno: int) -> No
 
     assert caught.value.errno == errno
     assert connection.closed is True
-    assert pool.released == 0
+    assert pool.released == 1
 
 
 async def test_execute_treats_a_bare_oserror_as_connectivity() -> None:
@@ -265,7 +266,8 @@ async def test_execute_times_out_and_drops_the_connection() -> None:
 
     This is what a single asyncio.timeout() around the whole call replaces the
     old read/write timeouts with: nothing here can block forever, and the
-    connection is dropped rather than returned in an unknown state.
+    connection is closed rather than reused in an unknown state. It is still
+    released, so its slot in the pool is freed.
     """
     manager = _manager()
     connection = FakeConnection()
@@ -284,7 +286,77 @@ async def test_execute_times_out_and_drops_the_connection() -> None:
         await manager.execute("SELECT 1")
 
     assert connection.closed is True
-    assert pool.released == 0
+    assert pool.released == 1
+
+
+async def test_execute_returns_every_connection_across_repeated_failures() -> None:
+    """Failing queries do not drain the pool one connection at a time.
+
+    A failed query closes its connection, but only release() frees its slot
+    in the pool. Without it the pool is exhausted after POOL_MAX_SIZE
+    failures, and every later query times out waiting for a connection.
+    """
+    manager = _manager()
+    pool = FakePool(
+        FakeConnection(
+            _cursor(error=pymysql_err.OperationalError(1054, "Unknown column"))
+        )
+    )
+
+    with patch(CREATE_POOL, AsyncMock(return_value=pool)):
+        for _ in range(POOL_MAX_SIZE + 1):
+            with pytest.raises(MySQLQueryError):
+                await manager.execute("SELECT nope FROM emp")
+
+    assert pool.acquired == POOL_MAX_SIZE + 1
+    assert pool.released == pool.acquired
+
+
+async def test_execute_returns_a_connection_that_failed_its_ping() -> None:
+    """A connection that cannot reconnect is closed and released as well."""
+    manager = _manager()
+    connection = FakeConnection(
+        ping_error=pymysql_err.OperationalError(2003, "Can't connect")
+    )
+    pool = FakePool(connection)
+
+    with (
+        patch(CREATE_POOL, AsyncMock(return_value=pool)),
+        pytest.raises(MySQLConnectionError),
+    ):
+        await manager.execute("SELECT 1")
+
+    assert connection.closed is True
+    assert pool.released == 1
+
+
+async def test_execute_drops_and_returns_a_cancelled_query() -> None:
+    """A query that is cancelled midway gives its connection back, closed.
+
+    A cancellation is not an error the query handlers catch, so it has to be
+    the finally block that closes the connection, with its query still in
+    flight, and frees its slot.
+    """
+    manager = _manager()
+    connection = FakeConnection()
+    pool = FakePool(connection)
+    started = asyncio.Event()
+
+    async def hang(*args: Any, **kwargs: Any) -> None:
+        started.set()
+        await asyncio.sleep(3600)
+
+    connection.cursor_obj.execute = hang  # type: ignore[method-assign]
+
+    with patch(CREATE_POOL, AsyncMock(return_value=pool)):
+        task = asyncio.create_task(manager.execute("SELECT 1"))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert connection.closed is True
+    assert pool.released == 1
 
 
 async def test_execute_survives_a_pool_that_cannot_be_built() -> None:
@@ -379,7 +451,12 @@ async def test_test_connection_times_out() -> None:
 
 
 async def test_close_drops_the_current_pool() -> None:
-    """Unloading the entry releases the pooled connections."""
+    """Unloading the entry closes the pooled connections, busy ones included.
+
+    terminate() closes the connections a running query still holds as well,
+    so unloading never waits for a query on a database that stopped
+    answering.
+    """
     manager = _manager()
     pool = FakePool(FakeConnection(_cursor(rows=[])))
 
@@ -387,7 +464,7 @@ async def test_close_drops_the_current_pool() -> None:
         await manager.execute("SELECT 1")
         await manager.close()
 
-    assert pool.closed is True
+    assert pool.terminated is True
     assert pool.wait_closed_called is True
 
 

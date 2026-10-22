@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-10-22
+
+### Fixed
+
+- **A failed query no longer takes a connection out of the pool for good.** A query the database rejected, one that timed out, one whose connection could not be rebuilt after the server dropped it, and one that was cancelled closed its connection without handing it back to the pool. The pool kept counting that connection as in use, so after ten such failures on one database connection, for instance a sensor with a mistake in its query polled every 30 seconds, every sensor of that connection stopped updating until the integration was reloaded. The connection is now closed and handed back, which frees its place in the pool.
+- **Reloading, disabling or removing a database connection no longer hangs.** After a single failure of that kind, closing the pool waited forever for the connection that never came back, so a reload, which also follows every change made through **Configure**, never finished. Closing the pool now also closes the connections a query still holds instead of waiting for them; a query still running at that moment is cut off, and its sensor is being removed anyway.
+
 ## [1.6.0] - 2026-10-05
 
 ### Changed

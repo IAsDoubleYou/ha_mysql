@@ -278,8 +278,20 @@ class MySQLConnectionManager:
         this way can never change what the statement does. Left as None, the
         query is sent exactly as written, which also keeps a literal percent
         sign, such as in LIKE '%text%', from being misread as a placeholder.
+
+        Only a query that completed leaves its connection fit for reuse. One
+        that failed, timed out or was cancelled may still have a query in
+        flight on the wire, and reusing it would let the next query read its
+        leftovers, so that connection is closed. Either way it goes back
+        through release(): only that frees its slot in the pool, and aiomysql
+        does not pool a closed connection again. A connection that skipped
+        release() would stay counted as in use for good: after POOL_MAX_SIZE
+        failures the pool would hand out nothing at all, and close() would
+        wait for it forever.
         """
+        pool: aiomysql.Pool | None = None
         connection: aiomysql.Connection | None = None
+        reusable = False
         try:
             async with asyncio.timeout(QUERY_TIMEOUT):
                 pool = await self._get_pool()
@@ -291,22 +303,19 @@ class MySQLConnectionManager:
                 async with connection.cursor(aiomysql.DictCursor) as cursor:
                     await cursor.execute(query, params)
                     rows = await cursor.fetchall()
+            reusable = True
         except TimeoutError as err:
-            if connection is not None:
-                # It may still have a query in flight on the wire; handing it
-                # back to the pool would let the next query read its
-                # leftovers, so it is dropped instead of released.
-                connection.close()
             raise MySQLConnectionError(
                 f"Timed out reaching MySQL at {self.target}: {err}"
             ) from err
         except (pymysql_err.Error, OSError) as err:
-            if connection is not None:
-                connection.close()
             raise _wrap_error(err, self.target) from err
-        else:
-            pool.release(connection)
-            return [_convert_row(row) for row in rows]
+        finally:
+            if pool is not None and connection is not None:
+                if not reusable:
+                    connection.close()
+                pool.release(connection)
+        return [_convert_row(row) for row in rows]
 
     async def test_connection(self) -> None:
         """Verify the settings on a connection of their own.
@@ -348,12 +357,22 @@ class MySQLConnectionManager:
             await connection.ensure_closed()
 
     async def close(self) -> None:
-        """Release every pooled connection."""
+        """Close every pooled connection, including the ones still in use.
+
+        terminate() rather than close(): after close(), wait_closed() waits
+        until every borrowed connection is back, and a query on a database
+        that stopped answering only gives its connection back after
+        QUERY_TIMEOUT. When that connection comes back closed, release() does
+        not wake wait_closed() at all, so unloading the entry would hang for
+        good. Whoever calls this is done with the pool, an entry being
+        unloaded or a finished test run in the options flow, so nothing is
+        waiting for those queries any more.
+        """
         async with self._pool_lock:
             pool, self._pool = self._pool, None
         if pool is None:
             return
-        pool.close()
+        pool.terminate()
         await pool.wait_closed()
 
 

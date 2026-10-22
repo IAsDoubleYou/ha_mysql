@@ -167,6 +167,7 @@ class FakePool:
         self.acquired = 0
         self.released = 0
         self.closed = False
+        self.terminated = False
         self.wait_closed_called = False
 
     async def acquire(self) -> FakeConnection:
@@ -180,6 +181,11 @@ class FakePool:
 
     def close(self) -> None:
         """Start closing the pool."""
+        self.closed = True
+
+    def terminate(self) -> None:
+        """Close the pool, including the connections still in use."""
+        self.terminated = True
         self.closed = True
 
     async def wait_closed(self) -> None:
