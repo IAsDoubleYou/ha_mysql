@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.7.0] - 2026-10-22
 
-Error handling, the configuration screens and the translations are brought in line with mysql_query. Nothing changes for automations, scripts or dashboards.
+Error handling, the configuration screens and the translations are brought in line with mysql_query, and a leak in the connection pool is fixed. Automations, scripts and dashboards keep working as they are. Versions 1.6.0 and 1.6.1 were never released and are part of this one.
 
 ### Added
 
@@ -18,15 +18,19 @@ Error handling, the configuration screens and the translations are brought in li
 
 ### Changed
 
+- **Minimum Home Assistant version is now 2026.3.0**, declared in `hacs.json` (previously 2025.1.0). Home Assistant moved to Python 3.14 with that release; the code base now targets Python 3.14 and CI runs on it. HACS refuses to download this version on an older Home Assistant, which stays on the previous release.
 - **The connection is no longer changed under Configure.** Configure is for the sensors, Reconfigure for the connection.
 - **A failed connection is told apart by its cause, at startup and in the forms alike.** A server that cannot be reached, is full or is shutting down is retried by Home Assistant. Refused credentials ask for new ones. An unknown database, and any other refusal by the server, such as a host the account may not connect from, a locked account or an expired password, fail the connection with the reason from the server, because waiting does not fix them. On the form such a refusal used to read "Unexpected error". At startup a server that only had too many connections for this user (error 1203) failed the connection; it is now retried.
 - **The bulky attributes are left out of the recorder**: `json_result`, `json_result_truncated`, `executed_sql_query`, `query_date` and `query_time`. The query time changes on every run, so every poll stored a new copy of the result set. They are still in the current state. The README no longer advises excluding the whole sensor from the recorder, which also dropped its history and its statistics.
 - **The actions are registered with the integration**, so `set_query` and `select_record` stay listed while no connection is loaded.
 - A row selected with `select_record` that the result does not have is reported in the log once per selection, instead of on every update.
 - The entry is reloaded by Home Assistant's options flow instead of by an update listener. Home Assistant does not allow an update listener together with the sign-in and reconfigure flows from 2026.12 on.
+- Test suite: use `async_get_device_by_identifier`, as `async_get_device` is deprecated in current Home Assistant.
 
 ### Fixed
 
+- **A failed query no longer takes a connection out of the pool for good.** A query the database rejected, one that timed out, one whose connection could not be rebuilt after the server dropped it, and one that was cancelled closed its connection without handing it back to the pool. The pool kept counting that connection as in use, so after ten such failures on one database connection, for instance a sensor with a mistake in its query polled every 30 seconds, every sensor of that connection stopped updating until the integration was reloaded. The connection is now closed and handed back, which frees its place in the pool.
+- **Reloading, disabling or removing a database connection no longer hangs.** After a single failure of that kind, closing the pool waited forever for the connection that never came back, so a reload, which also follows every change made through **Configure**, never finished. Closing the pool now also closes the connections a query still holds instead of waiting for them; a query still running at that moment is cut off, and its sensor is being removed anyway.
 - **The password is no longer sent to the browser.** The form to change the connection was filled in with the stored password, which put it in the form definition. The password field on Reconfigure starts empty; leave it empty to keep the current password.
 - **Changing the host or database of a connection kept its old identity**, so the old combination could not be added again, and the new one could end up identical to another connection.
 - **A connection with TLS on no longer builds its TLS context on the event loop.** That loaded the certificate bundle from disk there, which Home Assistant reports as a blocking call. The context Home Assistant caches is used instead.
@@ -35,20 +39,6 @@ Error handling, the configuration screens and the translations are brought in li
 ### Deprecated
 
 - **The YAML configuration**, the `ha_mysql:` section and the sensors with `platform: ha_mysql`. It still works in this release and is removed in 2.0.0. The connection and its sensors were imported and are stored in Home Assistant, so removing both from `configuration.yaml` loses nothing; Repairs shows what to do.
-
-## [1.6.1] - 2026-10-22
-
-### Fixed
-
-- **A failed query no longer takes a connection out of the pool for good.** A query the database rejected, one that timed out, one whose connection could not be rebuilt after the server dropped it, and one that was cancelled closed its connection without handing it back to the pool. The pool kept counting that connection as in use, so after ten such failures on one database connection, for instance a sensor with a mistake in its query polled every 30 seconds, every sensor of that connection stopped updating until the integration was reloaded. The connection is now closed and handed back, which frees its place in the pool.
-- **Reloading, disabling or removing a database connection no longer hangs.** After a single failure of that kind, closing the pool waited forever for the connection that never came back, so a reload, which also follows every change made through **Configure**, never finished. Closing the pool now also closes the connections a query still holds instead of waiting for them; a query still running at that moment is cut off, and its sensor is being removed anyway.
-
-## [1.6.0] - 2026-10-05
-
-### Changed
-
-- **Minimum Home Assistant version is now 2026.3.0**, declared in `hacs.json` (previously 2025.1.0). Home Assistant moved to Python 3.14 with that release; the code base now targets Python 3.14 and CI runs on it. HACS refuses to download this version on an older Home Assistant, which stays on the previous release.
-- Test suite: use `async_get_device_by_identifier`, as `async_get_device` is deprecated in current Home Assistant.
 
 ## [1.5.0] - 2026-09-30
 
