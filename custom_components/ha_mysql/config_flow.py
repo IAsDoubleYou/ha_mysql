@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import logging
 from typing import Any
@@ -12,9 +13,10 @@ import voluptuous as vol
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.const import (
     CONF_DEVICE_CLASS,
@@ -22,7 +24,7 @@ from homeassistant.const import (
     CONF_SCAN_INTERVAL,
     CONF_UNIT_OF_MEASUREMENT,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
@@ -64,17 +66,14 @@ from .const import (
 from .coordinator import (
     MySQLConnectionError,
     MySQLConnectionManager,
+    MySQLError,
     MySQLQueryError,
     TLSUnavailableError,
+    classify_connect_error,
 )
 from .sql import validate_read_only_query
 
 _LOGGER = logging.getLogger(__name__)
-
-# MySQL error codes worth translating into a friendly message.
-_ERRNO_ACCESS_DENIED = 1045
-_ERRNO_DATABASE_ACCESS_DENIED = 1044
-_ERRNO_UNKNOWN_DATABASE = 1049
 
 # Database errors are shown on the form itself, so they are cut off before they
 # push the rest of the dialog out of view.
@@ -84,20 +83,75 @@ _MAX_ERROR_LENGTH = 255
 # therefore belong under the form as a whole.
 _BASE_ERRORS = ("cannot_connect", "unknown")
 
-CONNECTION_SCHEMA = vol.Schema(
+# A masked input. The stored password is never its default or its suggested
+# value, so it is not sent to the browser: either would put it in the form
+# definition, readable in the page source and in the network traffic.
+PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+
+def _connection_schema(*, editing: bool = False) -> vol.Schema:
+    """Return the form for the connection settings.
+
+    Editing makes the password optional: the stored one is not shown, so a
+    field left empty keeps it. The current values are added by the caller as
+    suggestions, without the password.
+    """
+    password = (
+        vol.Optional(CONF_MYSQL_PASSWORD)
+        if editing
+        else vol.Required(CONF_MYSQL_PASSWORD)
+    )
+    return vol.Schema(
+        {
+            vol.Required(CONF_MYSQL_HOST): TextSelector(),
+            vol.Required(CONF_MYSQL_PORT, default=DEFAULT_PORT): NumberSelector(
+                NumberSelectorConfig(
+                    min=1, max=65535, step=1, mode=NumberSelectorMode.BOX
+                )
+            ),
+            vol.Required(CONF_MYSQL_USERNAME): TextSelector(),
+            password: PASSWORD_SELECTOR,
+            vol.Required(CONF_MYSQL_DATABASE): TextSelector(),
+            vol.Required(CONF_USE_TLS, default=DEFAULT_USE_TLS): BooleanSelector(),
+        }
+    )
+
+
+CONNECTION_SCHEMA = _connection_schema()
+RECONFIGURE_SCHEMA = _connection_schema(editing=True)
+REAUTH_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_MYSQL_HOST): TextSelector(),
-        vol.Required(CONF_MYSQL_PORT, default=DEFAULT_PORT): NumberSelector(
-            NumberSelectorConfig(min=1, max=65535, step=1, mode=NumberSelectorMode.BOX)
-        ),
         vol.Required(CONF_MYSQL_USERNAME): TextSelector(),
-        vol.Required(CONF_MYSQL_PASSWORD): TextSelector(
-            TextSelectorConfig(type=TextSelectorType.PASSWORD)
-        ),
-        vol.Required(CONF_MYSQL_DATABASE): TextSelector(),
-        vol.Required(CONF_USE_TLS, default=DEFAULT_USE_TLS): BooleanSelector(),
+        vol.Required(CONF_MYSQL_PASSWORD): PASSWORD_SELECTOR,
     }
 )
+
+
+def _connection_from_input(
+    user_input: Mapping[str, Any], stored: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """Return the connection settings that a submitted form describes.
+
+    A password left empty on the reconfigure form keeps the stored one: the
+    form does not show it, so an untouched field means "keep it" and not "set
+    it to nothing".
+    """
+    password = user_input.get(CONF_MYSQL_PASSWORD) or (stored or {}).get(
+        CONF_MYSQL_PASSWORD, ""
+    )
+    return {
+        CONF_MYSQL_HOST: user_input[CONF_MYSQL_HOST].strip(),
+        CONF_MYSQL_PORT: int(user_input[CONF_MYSQL_PORT]),
+        CONF_MYSQL_USERNAME: user_input[CONF_MYSQL_USERNAME],
+        CONF_MYSQL_PASSWORD: password,
+        CONF_MYSQL_DATABASE: user_input[CONF_MYSQL_DATABASE].strip(),
+        CONF_USE_TLS: user_input.get(CONF_USE_TLS, DEFAULT_USE_TLS),
+    }
+
+
+def _without_password(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the settings to suggest on a form, so never the password."""
+    return {key: value for key, value in settings.items() if key != CONF_MYSQL_PASSWORD}
 
 
 def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
@@ -204,9 +258,9 @@ class _QueryCheck:
 
 def _error_detail(err: Exception) -> str:
     """Return the message of an error in a form that fits on the dialog."""
-    # The coordinator prefixes its own errors; the driver message is what the
-    # user needs to see.
-    message = str(err).removeprefix("Query failed: ").strip()
+    # What the driver said is what the user needs to see, without the context
+    # the connection manager puts in front of it.
+    message = (err.detail if isinstance(err, MySQLError) else str(err)).strip()
     # Some exceptions carry no message at all; the type is better than nothing.
     if not message:
         return type(err).__name__
@@ -216,14 +270,18 @@ def _error_detail(err: Exception) -> str:
 
 
 async def _async_validate_connection(
-    hass: HomeAssistant, connection: dict[str, Any]
+    connection: dict[str, Any],
 ) -> tuple[str | None, str]:
     """Try the connection.
 
     Returns the error key to show on the form, and the message that goes
     with it. Causes that speak for themselves come without a message. Shared
-    by the initial setup and the options flow, so editing the connection
-    later is checked the same way as setting it up.
+    by the setup, sign-in and reconfigure forms, so each checks a connection
+    the same way.
+
+    The form is where the failure is reported, so it is only logged at debug
+    level. Only an unexpected exception is logged as an error, with its
+    traceback.
     """
     manager = MySQLConnectionManager(connection)
     try:
@@ -232,18 +290,17 @@ async def _async_validate_connection(
         # The settings themselves are fine; the server just did not encrypt.
         _LOGGER.debug("TLS requested but not established: %s", err)
         return "tls_unavailable", ""
-    except MySQLQueryError as err:
-        if err.errno == _ERRNO_ACCESS_DENIED:
-            return "invalid_auth", ""
-        if err.errno in (_ERRNO_DATABASE_ACCESS_DENIED, _ERRNO_UNKNOWN_DATABASE):
-            return "unknown_database", ""
-        _LOGGER.debug("Unexpected database error while validating: %s", err)
-        return "unknown", _error_detail(err)
-    except MySQLConnectionError as err:
-        # A refused connection, a timeout and a failed TLS handshake all end
-        # up here, and they need very different fixes, so the reason from the
-        # driver is shown instead of only the generic advice.
-        return "cannot_connect", _error_detail(err)
+    except MySQLError as err:
+        # The same classification setup uses, so the form and the connection
+        # never give different advice for the same answer from the server.
+        failure = classify_connect_error(err)
+        if failure in ("invalid_auth", "unknown_database"):
+            return failure, ""
+        # A refused connection, a timeout, a host the account may not connect
+        # from and a failed TLS handshake all end up here, and each needs a
+        # different fix, so the reason from the driver is shown as well.
+        _LOGGER.debug("Connection check failed: %s", err)
+        return failure, _error_detail(err)
     except Exception as err:
         _LOGGER.exception("Unexpected error while validating the connection")
         return "unknown", _error_detail(err)
@@ -269,19 +326,12 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
         detail = ""
 
         if user_input is not None:
-            connection = {
-                CONF_MYSQL_HOST: user_input[CONF_MYSQL_HOST].strip(),
-                CONF_MYSQL_PORT: int(user_input[CONF_MYSQL_PORT]),
-                CONF_MYSQL_USERNAME: user_input[CONF_MYSQL_USERNAME],
-                CONF_MYSQL_PASSWORD: user_input[CONF_MYSQL_PASSWORD],
-                CONF_MYSQL_DATABASE: user_input[CONF_MYSQL_DATABASE].strip(),
-                CONF_USE_TLS: user_input.get(CONF_USE_TLS, DEFAULT_USE_TLS),
-            }
+            connection = _connection_from_input(user_input)
 
             await self.async_set_unique_id(_connection_id(connection))
             self._abort_if_unique_id_configured()
 
-            error, detail = await _async_validate_connection(self.hass, connection)
+            error, detail = await _async_validate_connection(connection)
             if error is None:
                 return self.async_create_entry(
                     title=_entry_title(connection),
@@ -299,6 +349,89 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"error": detail},
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change where and how the connection is made.
+
+        The new settings are tried before they are saved. The identity of the
+        entry follows a changed host, port or database, but never onto
+        another connection that already exists.
+        """
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        detail = ""
+
+        if user_input is not None:
+            connection = _connection_from_input(user_input, stored=entry.data)
+
+            error, detail = await _async_validate_connection(connection)
+            if error is None:
+                changes: dict[str, Any] = {}
+                new_unique_id = _connection_id(connection)
+                if new_unique_id != entry.unique_id:
+                    other = self.hass.config_entries.async_entry_for_domain_unique_id(
+                        DOMAIN, new_unique_id
+                    )
+                    if other is not None and other.entry_id != entry.entry_id:
+                        return self.async_abort(reason="already_configured")
+                    changes["unique_id"] = new_unique_id
+                # A title the user picked stays; the generated one follows.
+                if entry.title == _entry_title(entry.data):
+                    changes["title"] = _entry_title(connection)
+                return self.async_update_reload_and_abort(
+                    entry, data=connection, **changes
+                )
+            errors["base"] = error
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                RECONFIGURE_SCHEMA, _without_password(user_input or entry.data)
+            ),
+            errors=errors,
+            description_placeholders={"error": detail},
+        )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Start the flow that asks for new credentials.
+
+        Home Assistant starts it when setup, or a sensor's query, reports
+        that the server refused the stored username or password.
+        """
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for the username and password, and update the entry with them."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        detail = ""
+
+        if user_input is not None:
+            connection = {
+                **entry.data,
+                CONF_MYSQL_USERNAME: user_input[CONF_MYSQL_USERNAME],
+                CONF_MYSQL_PASSWORD: user_input[CONF_MYSQL_PASSWORD],
+            }
+            error, detail = await _async_validate_connection(connection)
+            if error is None:
+                return self.async_update_reload_and_abort(entry, data=connection)
+            errors["base"] = error
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=self.add_suggested_values_to_schema(
+                REAUTH_SCHEMA,
+                {CONF_MYSQL_USERNAME: (user_input or entry.data)[CONF_MYSQL_USERNAME]},
+            ),
+            errors=errors,
+            description_placeholders={"connection": entry.title, "error": detail},
+        )
+
     async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
         """Import the settings from configuration.yaml.
 
@@ -307,10 +440,8 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
         The connection itself is only taken from YAML the first time this
         entry is created: on every later restart the existing entry's
         connection is left exactly as configured, so a correction made
-        through Change the database connection is never silently reverted
-        by a configuration.yaml the user forgot to update or remove - which
-        is also why "the new connection ... replaces the old one" in the
-        README's description of that options step is actually true.
+        through Reconfigure or the sign-in flow is never silently reverted by
+        a configuration.yaml the user forgot to update or remove.
         """
         connection = import_data[CONF_CONNECTION]
         yaml_sensors = import_data[CONF_SENSORS]
@@ -327,19 +458,27 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
                 for sensor in entry.options.get(CONF_SENSORS, [])
                 if sensor.get(CONF_SOURCE) != SOURCE_YAML
             ]
-            self.hass.config_entries.async_update_entry(
+            changed = self.hass.config_entries.async_update_entry(
                 entry,
                 options={CONF_SENSORS: [*yaml_sensors, *kept]},
             )
+            # There is no update listener, so an entry that is loaded, or is
+            # being loaded right now, only picks up the new sensor list when it
+            # is loaded again. One that is not loaded yet reads it when it is.
+            if changed and entry.state in (
+                ConfigEntryState.LOADED,
+                ConfigEntryState.SETUP_IN_PROGRESS,
+            ):
+                self.hass.config_entries.async_schedule_reload(entry.entry_id)
             _LOGGER.warning(
                 "ha_mysql: the connection settings in configuration.yaml for "
                 "%s are only used the first time this integration starts. "
                 "This entry already exists, so its connection was left as "
                 "configured through the user interface; only its sensor list "
-                "still follows configuration.yaml. Remove the host/port/"
-                "username/password/database keys from configuration.yaml, or "
-                "keep them in sync manually - Home Assistant will not do it "
-                "for you and will not warn you again if they drift apart.",
+                "still follows configuration.yaml. The YAML configuration is "
+                "deprecated and stops working in ha_mysql 2.0.0: remove the "
+                "ha_mysql: section and the ha_mysql sensors from "
+                "configuration.yaml. The connection and its sensors stay.",
                 self.unique_id,
             )
             return self.async_abort(reason="already_configured")
@@ -351,8 +490,13 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-class HAMySQLOptionsFlow(OptionsFlow):
-    """Manage the sensors of a MySQL connection."""
+class HAMySQLOptionsFlow(OptionsFlowWithReload):
+    """Manage the sensors of a MySQL connection.
+
+    Reloads the entry when the sensor list changed, which is what builds the
+    sensors again from it. The connection itself is changed through
+    Reconfigure instead.
+    """
 
     def __init__(self) -> None:
         """Start without a selected sensor."""
@@ -428,53 +572,11 @@ class HAMySQLOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show what can be done with this connection."""
+        """Show what can be done with the sensors of this connection."""
         menu = ["add_sensor"]
         if self._sensors:
             menu += ["select_sensor", "remove_sensor"]
-        menu += ["edit_connection"]
         return self.async_show_menu(step_id="init", menu_options=menu)
-
-    async def async_step_edit_connection(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Change the database connection of this entry."""
-        errors: dict[str, str] = {}
-        detail = ""
-
-        if user_input is not None:
-            connection = {
-                CONF_MYSQL_HOST: user_input[CONF_MYSQL_HOST].strip(),
-                CONF_MYSQL_PORT: int(user_input[CONF_MYSQL_PORT]),
-                CONF_MYSQL_USERNAME: user_input[CONF_MYSQL_USERNAME],
-                CONF_MYSQL_PASSWORD: user_input[CONF_MYSQL_PASSWORD],
-                CONF_MYSQL_DATABASE: user_input[CONF_MYSQL_DATABASE].strip(),
-                CONF_USE_TLS: user_input.get(CONF_USE_TLS, DEFAULT_USE_TLS),
-            }
-
-            error, detail = await _async_validate_connection(self.hass, connection)
-            if error is None:
-                # The unique ID is left untouched, same as mysql_query: it
-                # only identifies the config entry, and changing it here
-                # would risk splitting the entry's history from its entities.
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    title=_entry_title(connection),
-                    data=connection,
-                )
-                # Only the connection changed; the sensors are written back
-                # unchanged so this step cannot wipe out the options.
-                return self.async_create_entry(data=dict(self.config_entry.options))
-            errors["base"] = error
-
-        return self.async_show_form(
-            step_id="edit_connection",
-            data_schema=self.add_suggested_values_to_schema(
-                CONNECTION_SCHEMA, user_input or dict(self.config_entry.data)
-            ),
-            errors=errors,
-            description_placeholders={"error": detail},
-        )
 
     async def async_step_add_sensor(
         self, user_input: dict[str, Any] | None = None

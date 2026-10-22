@@ -19,33 +19,10 @@
           "database": "Database voor query's die zelf geen database noemen.",
           "use_tls": "Versleutelt het verkeer naar de database. De server moet TLS ondersteunen; de verbinding mislukt als dat niet zo is. Het certificaat van de server wordt niet gecontroleerd, dus dit beschermt tegen meelezen op het netwerk, niet tegen een server die zich voordoet als de jouwe. Standaard uit, zodat bestaande installaties blijven werken."
         }
-      }
-    },
-    "error": {
-      "cannot_connect": "De server is niet bereikbaar. Controleer de host, de poort en je firewall. Details: {error}",
-      "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
-      "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
-      "unknown": "Onverwachte fout bij het verbinden: {error}",
-      "tls_unavailable": "De server accepteerde de verbinding, maar versleutelde deze niet. Configureer TLS op de database, of zet de versleutelingsoptie uit."
-    },
-    "abort": {
-      "already_configured": "Deze database is al ingesteld."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "MySQL-sensoren",
-        "menu_options": {
-          "add_sensor": "Sensor toevoegen",
-          "select_sensor": "Sensor bewerken",
-          "remove_sensor": "Sensoren verwijderen",
-          "edit_connection": "Databaseverbinding wijzigen"
-        }
       },
-      "edit_connection": {
+      "reconfigure": {
         "title": "MySQL-verbinding",
-        "description": "Vul de gegevens van de MySQL- of MariaDB-server in. De verbinding wordt getest voordat deze wordt opgeslagen.",
+        "description": "Wijzig waar en hoe de verbinding wordt gemaakt. De nieuwe instellingen worden geprobeerd voordat ze worden opgeslagen. De sensoren wijzig je onder Configureren.",
         "data": {
           "host": "Host",
           "port": "Poort",
@@ -58,8 +35,43 @@
           "host": "Hostnaam of IP-adres van de databaseserver.",
           "port": "Poort waarop de server luistert. Standaard is dat 3306.",
           "username": "Gebruiker waaronder de query's draaien. Leesrechten volstaan.",
+          "password": "Laat leeg om het huidige wachtwoord te houden.",
           "database": "Database voor query's die zelf geen database noemen.",
-          "use_tls": "Versleutelt het verkeer naar de database. De server moet TLS ondersteunen; de verbinding mislukt als dat niet zo is. Het certificaat van de server wordt niet gecontroleerd, dus dit beschermt tegen meelezen op het netwerk, niet tegen een server die zich voordoet als de jouwe. Standaard uit, zodat bestaande installaties blijven werken."
+          "use_tls": "Versleutelt het verkeer naar de database. De server moet TLS ondersteunen; de verbinding mislukt als dat niet zo is. Het certificaat van de server wordt niet gecontroleerd, dus dit beschermt tegen meelezen op het netwerk, niet tegen een server die zich voordoet als de jouwe."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Opnieuw inloggen",
+        "description": "De database weigerde de gebruikersnaam of het wachtwoord van {connection}. Vul de gegevens in die vanaf nu gebruikt worden.",
+        "data": {
+          "username": "Gebruikersnaam",
+          "password": "Wachtwoord"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "De server is niet bereikbaar. Controleer de host, de poort en je firewall. Details: {error}",
+      "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
+      "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
+      "connection_refused": "De server weigert de verbinding, en wachten lost dat niet op. De reden zegt wat er moet veranderen, bijvoorbeeld de host van waaraf het account mag verbinden, een geblokkeerd account of een verlopen wachtwoord. Details: {error}",
+      "unknown": "Onverwachte fout bij het verbinden: {error}",
+      "tls_unavailable": "De server accepteerde de verbinding, maar versleutelde deze niet. Configureer TLS op de database, of zet de versleutelingsoptie uit."
+    },
+    "abort": {
+      "already_configured": "Deze database is al ingesteld.",
+      "reauth_successful": "De inloggegevens zijn bijgewerkt.",
+      "reconfigure_successful": "De verbinding is bijgewerkt."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MySQL-sensoren",
+        "description": "Voeg sensoren van deze verbinding toe, bewerk of verwijder ze. De verbinding zelf wijzig je met Opnieuw configureren, in het menu van de verbinding.",
+        "menu_options": {
+          "add_sensor": "Sensor toevoegen",
+          "select_sensor": "Sensor bewerken",
+          "remove_sensor": "Sensoren verwijderen"
         }
       },
       "add_sensor": {
@@ -82,7 +94,7 @@
           "value_column": "Kolom van de geselecteerde rij die als status wordt gebruikt.",
           "value_template": "Template die de status oplevert. Gaat voor op de waardekolom. De variabelen row, rows en row_count zijn beschikbaar.",
           "state_class": "Nodig voor langetermijnstatistieken. De waarde moet numeriek zijn.",
-          "max_json_rows": "0 bewaart de volledige resultset. Een limiet houdt grote resultaten uit de recorder-database."
+          "max_json_rows": "0 bewaart de volledige resultset. Stel een limiet in als de query veel rijen kan opleveren: de hele set staat in de status van de sensor."
         }
       },
       "select_sensor": {
@@ -111,7 +123,7 @@
           "value_column": "Kolom van de geselecteerde rij die als status wordt gebruikt.",
           "value_template": "Template die de status oplevert. Gaat voor op de waardekolom. De variabelen row, rows en row_count zijn beschikbaar.",
           "state_class": "Nodig voor langetermijnstatistieken. De waarde moet numeriek zijn.",
-          "max_json_rows": "0 bewaart de volledige resultset. Een limiet houdt grote resultaten uit de recorder-database."
+          "max_json_rows": "0 bewaart de volledige resultset. Stel een limiet in als de query veel rijen kan opleveren: de hele set staat in de status van de sensor."
         }
       },
       "remove_sensor": {
@@ -130,13 +142,51 @@
       "query_failed": "De database weigert de query: {error}",
       "query_no_results": "De query werkt, maar levert geen rijen op. Controleer hem, of verstuur nogmaals om hem toch op te slaan.",
       "cannot_connect": "De database is niet bereikbaar. Controleer de host, de poort en je firewall. Details: {error}",
-      "invalid_auth": "De server weigert de gebruikersnaam of het wachtwoord.",
-      "unknown_database": "De database bestaat niet, of deze gebruiker heeft er geen toegang toe.",
-      "unknown": "Onverwachte fout: {error}",
-      "tls_unavailable": "De server accepteerde de verbinding, maar versleutelde deze niet. Configureer TLS op de database, of zet de versleutelingsoptie uit."
+      "unknown": "Onverwachte fout: {error}"
     },
     "abort": {
       "sensor_not_found": "Die sensor bestaat niet meer."
+    }
+  },
+  "exceptions": {
+    "invalid_auth": {
+      "message": "De database weigerde de gebruikersnaam of het wachtwoord van \"{connection}\". Vul nieuwe inloggegevens in om verder te gaan."
+    },
+    "unknown_database": {
+      "message": "De database van \"{connection}\" bestaat niet, of de gebruiker heeft er geen toegang toe. Een nieuw wachtwoord lost dat niet op: controleer de databasenaam en de rechten van de gebruiker, en corrigeer ze met Opnieuw configureren."
+    },
+    "connection_refused": {
+      "message": "De databaseserver weigerde de verbinding van \"{connection}\": {error}. Wachten lost dat niet op. De reden zegt wat er moet veranderen, bijvoorbeeld de host van waaraf het account mag verbinden, een geblokkeerd account of een verlopen wachtwoord."
+    },
+    "cannot_connect": {
+      "message": "Kan geen verbinding maken met \"{connection}\": {error}. Home Assistant probeert het zelf opnieuw."
+    },
+    "tls_unavailable": {
+      "message": "\"{connection}\" is ingesteld op TLS, maar de server accepteerde de verbinding zonder die te versleutelen. Configureer TLS op de database, of zet de versleutelingsoptie uit met Opnieuw configureren."
+    },
+    "query_failed": {
+      "message": "De database weigert de query: {error}"
+    },
+    "unreachable": {
+      "message": "MySQL op {target} is niet bereikbaar: {error}"
+    },
+    "query_not_read_only": {
+      "message": "Alleen SELECT-achtige statements zijn toegestaan; ha_mysql leest de database alleen."
+    },
+    "query_multiple_statements": {
+      "message": "Er is maar één statement per query toegestaan."
+    },
+    "values_without_query": {
+      "message": "values heeft een nieuwe query nodig in dezelfde aanroep; zonder die query is er niets om de waarden aan te koppelen."
+    },
+    "invalid_template": {
+      "message": "Ongeldige template in values: {error}"
+    }
+  },
+  "issues": {
+    "deprecated_yaml": {
+      "title": "De HA MySQL-configuratie in configuration.yaml is verouderd",
+      "description": "HA MySQL instellen in configuration.yaml is verouderd en werkt niet meer vanaf ha_mysql 2.0.0. De verbinding en de sensoren zijn al in Home Assistant opgeslagen, dus er gaat niets verloren als de YAML verdwijnt.\n\nVerwijder zowel de sectie `ha_mysql:` als de sensoren met `platform: ha_mysql` uit configuration.yaml, en herstart Home Assistant. Beheer daarna de sensoren via Configureren en de verbinding via Opnieuw configureren."
     }
   },
   "services": {

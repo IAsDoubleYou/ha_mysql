@@ -6,12 +6,14 @@ from collections.abc import Awaitable, Callable, Generator, Sequence
 from typing import Any
 from unittest.mock import patch
 
+from pymysql import err as pymysql_err
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mysql.const import DOMAIN
+from custom_components.ha_mysql.coordinator import MySQLError, _wrap_error
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -191,6 +193,11 @@ class FakePool:
     async def wait_closed(self) -> None:
         """Wait until the pool finished closing."""
         self.wait_closed_called = True
+
+
+def driver_error(errno: int, message: str) -> MySQLError:
+    """Return the error the connection manager raises for this driver error."""
+    return _wrap_error(pymysql_err.OperationalError(errno, message), UNIQUE_ID)
 
 
 def make_sensor(**overrides: Any) -> dict[str, Any]:

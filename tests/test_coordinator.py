@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, patch
 from pymysql import err as pymysql_err
 import pytest
 
+from homeassistant.util.ssl import client_context_no_verify
+
 from .conftest import ROWS, FakeConnection, FakeCursor, FakePool
 from custom_components.ha_mysql.const import (
     BINARY_PREVIEW_BYTES,
@@ -31,6 +33,8 @@ from custom_components.ha_mysql.coordinator import (
     TLSUnavailableError,
     _async_verify_tls,
     _convert_row,
+    _wrap_error,
+    classify_connect_error,
 )
 
 DB_CONFIG = {
@@ -484,14 +488,76 @@ def test_tls_builds_an_unverified_context() -> None:
     """Turning the option on hands the driver a context that does not verify.
 
     A database on a home network nearly always has a self signed certificate,
-    so verification would make the option unusable.
+    so verification would make the option unusable. The context is the one
+    Home Assistant caches, so the CA bundle is not loaded on the event loop.
     """
     manager = _manager(use_tls=True)
     context = manager._connect_kwargs["ssl"]
 
-    assert isinstance(context, ssl.SSLContext)
+    assert context is client_context_no_verify()
     assert context.check_hostname is False
     assert context.verify_mode is ssl.CERT_NONE
+
+
+@pytest.mark.parametrize(
+    ("error", "failure"),
+    [
+        (pymysql_err.OperationalError(2003, "Can't connect"), "cannot_connect"),
+        (pymysql_err.OperationalError(1203, "max_user_connections"), "cannot_connect"),
+        (OSError("network unreachable"), "cannot_connect"),
+        (pymysql_err.OperationalError(1045, "Access denied"), "invalid_auth"),
+        (pymysql_err.OperationalError(1044, "Access denied to db"), "unknown_database"),
+        (pymysql_err.OperationalError(1049, "Unknown database"), "unknown_database"),
+        (pymysql_err.OperationalError(1130, "Host not allowed"), "connection_refused"),
+        (pymysql_err.OperationalError(3118, "Account is locked"), "connection_refused"),
+    ],
+)
+def test_classify_connect_error(error: Exception, failure: str) -> None:
+    """Setup and the forms give the same advice for the same answer."""
+    assert classify_connect_error(_wrap_error(error, "db.local:3306/testdb")) == (
+        failure
+    )
+
+
+def test_wrapped_errors_keep_the_driver_message_apart() -> None:
+    """The driver message is kept without the context put in front of it."""
+    error = _wrap_error(
+        pymysql_err.OperationalError(1146, "Table 'testdb.x' doesn't exist"),
+        "db.local:3306/testdb",
+    )
+
+    assert str(error) == "Query failed: Table 'testdb.x' doesn't exist"
+    assert error.detail == "Table 'testdb.x' doesn't exist"
+    assert error.errno == 1146
+
+
+@pytest.mark.parametrize(
+    ("failure", "refused"),
+    [
+        (pymysql_err.OperationalError(1045, "Access denied"), True),
+        (pymysql_err.OperationalError(2003, "Can't connect"), False),
+        (pymysql_err.OperationalError(1049, "Unknown database"), False),
+        (None, False),
+    ],
+)
+async def test_credentials_refused_needs_a_refused_fresh_login(
+    failure: Exception | None, refused: bool
+) -> None:
+    """Only a new login that is refused counts as refused credentials.
+
+    Error 1045 on a query can also mean a missing FILE privilege, and a login
+    that fails for another reason says nothing about the credentials.
+    """
+    manager = _manager()
+    connection = FakeConnection(_cursor(rows=[]))
+    connect = (
+        AsyncMock(return_value=connection)
+        if failure is None
+        else AsyncMock(side_effect=failure)
+    )
+
+    with patch(CONNECT, connect):
+        assert await manager.credentials_refused() is refused
 
 
 async def test_verify_tls_accepts_an_encrypted_session() -> None:

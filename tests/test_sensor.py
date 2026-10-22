@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.const import MAX_LENGTH_STATE_STATE, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .conftest import ENTITY_ID, make_entry, make_sensor, setup_entry
+from .conftest import ENTITY_ID, driver_error, make_entry, make_sensor, setup_entry
 from custom_components.ha_mysql.const import (
     DOMAIN,
     SERVICE_SELECT_RECORD,
     SERVICE_SET_QUERY,
 )
 from custom_components.ha_mysql.coordinator import MySQLConnectionError
+from custom_components.ha_mysql.sensor import HAMySQLSensor
 
 
 async def _advance(hass: HomeAssistant, freezer: FrozenDateTimeFactory) -> None:
@@ -304,6 +307,36 @@ async def test_select_record_out_of_range(hass: HomeAssistant, mock_execute) -> 
     assert attributes["selected_row"] == 0
 
 
+async def test_select_record_out_of_range_is_reported_once(
+    hass: HomeAssistant,
+    mock_execute,
+    freezer: FrozenDateTimeFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The fallback is logged once per selection, not on every poll."""
+    await setup_entry(hass, make_entry())
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SELECT_RECORD,
+        {"entity_id": ENTITY_ID, "rownumber": 99},
+        blocking=True,
+    )
+    await _advance(hass, freezer)
+    await _advance(hass, freezer)
+
+    assert caplog.text.count("is out of range") == 1
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SELECT_RECORD,
+        {"entity_id": ENTITY_ID, "rownumber": 50},
+        blocking=True,
+    )
+
+    assert caplog.text.count("is out of range") == 2
+
+
 async def test_set_query_refreshes_immediately(
     hass: HomeAssistant, mock_execute
 ) -> None:
@@ -512,7 +545,7 @@ async def test_set_query_rejects_a_broken_value_template(
     await setup_entry(hass, make_entry())
     mock_execute.reset_mock()
 
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError) as caught:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_QUERY,
@@ -524,6 +557,7 @@ async def test_set_query_rejects_a_broken_value_template(
             blocking=True,
         )
 
+    assert caught.value.translation_key == "invalid_template"
     assert mock_execute.call_count == 0
 
 
@@ -532,7 +566,7 @@ async def test_set_query_rejects_a_write(hass: HomeAssistant, mock_execute) -> N
     await setup_entry(hass, make_entry())
     mock_execute.reset_mock()
 
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError) as caught:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_QUERY,
@@ -540,6 +574,7 @@ async def test_set_query_rejects_a_write(hass: HomeAssistant, mock_execute) -> N
             blocking=True,
         )
 
+    assert caught.value.translation_key == "query_not_read_only"
     assert mock_execute.call_count == 0
     assert (
         hass.states.get(ENTITY_ID).attributes["executed_sql_query"]
@@ -559,7 +594,7 @@ async def test_set_query_rejects_stacked_statements(
     await setup_entry(hass, make_entry())
     mock_execute.reset_mock()
 
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError) as caught:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_QUERY,
@@ -567,6 +602,7 @@ async def test_set_query_rejects_stacked_statements(
             blocking=True,
         )
 
+    assert caught.value.translation_key == "query_multiple_statements"
     assert mock_execute.call_count == 0
 
 
@@ -581,7 +617,7 @@ async def test_set_query_values_without_a_query_is_rejected(
     await setup_entry(hass, make_entry())
     mock_execute.reset_mock()
 
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError) as caught:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_QUERY,
@@ -589,6 +625,7 @@ async def test_set_query_values_without_a_query_is_rejected(
             blocking=True,
         )
 
+    assert caught.value.translation_key == "values_without_query"
     assert mock_execute.call_count == 0
 
 
@@ -603,6 +640,82 @@ async def test_becomes_unavailable_on_database_error(
     await _advance(hass, freezer)
 
     assert hass.states.get(ENTITY_ID).state == STATE_UNAVAILABLE
+
+
+async def test_refused_credentials_during_a_poll_start_the_sign_in_flow(
+    hass: HomeAssistant, mock_execute, freezer: FrozenDateTimeFactory
+) -> None:
+    """A password changed on the server asks for a new one, and polling stops.
+
+    The pooled connections keep working until they are rebuilt, so this is
+    usually where a changed password shows up first. Polling stops until the
+    entry is loaded again, instead of hammering the server with a login it
+    refuses.
+    """
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    mock_execute.side_effect = driver_error(1045, "Access denied for user 'user'")
+    await _advance(hass, freezer)
+
+    assert hass.states.get(ENTITY_ID).state == STATE_UNAVAILABLE
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
+
+    mock_execute.reset_mock()
+    await _advance(hass, freezer)
+
+    assert mock_execute.call_count == 0
+
+
+async def test_access_denied_with_working_credentials_is_only_a_failed_query(
+    hass: HomeAssistant, mock_execute, freezer: FrozenDateTimeFactory
+) -> None:
+    """Error 1045 on a query, while a fresh login works, asks for nothing.
+
+    MySQL answers a statement that needs the FILE privilege with the same
+    error, and new credentials would not fix that.
+    """
+    await setup_entry(hass, make_entry())
+
+    def refuse_the_query(*args: Any) -> None:
+        raise driver_error(1045, "Access denied; you need the FILE privilege")
+
+    mock_execute.side_effect = refuse_the_query
+    await _advance(hass, freezer)
+
+    assert hass.states.get(ENTITY_ID).state == STATE_UNAVAILABLE
+    assert not hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+
+
+async def test_a_failed_poll_is_logged_in_plain_words(
+    hass: HomeAssistant,
+    mock_execute,
+    freezer: FrozenDateTimeFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log says what the database said, without the internal prefix."""
+    await setup_entry(hass, make_entry())
+
+    mock_execute.side_effect = driver_error(1054, "Unknown column 'x'")
+    await _advance(hass, freezer)
+
+    assert "The database refused the query: Unknown column 'x'" in caplog.text
+
+
+def test_bulky_attributes_are_not_recorded() -> None:
+    """The query time changes on every poll, so it stays out of the recorder.
+
+    So does json_result, which can hold the whole result set: recorded, every
+    poll would store a new copy of it.
+    """
+    assert HAMySQLSensor._unrecorded_attributes == {
+        "executed_sql_query",
+        "json_result",
+        "json_result_truncated",
+        "query_date",
+        "query_time",
+    }
 
 
 async def test_recovers_after_database_error(

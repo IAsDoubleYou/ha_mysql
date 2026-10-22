@@ -86,13 +86,17 @@ Add this repository as a custom repository, following [these directions](https:/
 1. Go to **Settings → Devices & services → Add integration**.
 2. Search for **HA MySQL**.
 3. Fill in the connection details. The connection is tested before it is saved, so mistakes are reported right away.
-4. Open **Configure** on the integration card to add sensors, or to change the database connection itself.
+4. Open **Configure** on the integration card to add sensors.
 
-Every connection becomes one device, with all its sensors underneath it. Sensors are added, edited and removed through **Configure**; changes take effect immediately, without a restart. The host, port, username, password and database can be changed the same way, through **Configure → Change the database connection**; the new connection is tested before it replaces the old one.
+Every connection becomes one device, with all its sensors underneath it. Sensors are added, edited and removed through **Configure**; changes take effect immediately, without a restart.
+
+The connection itself, the host, port, username, password, database and TLS, is changed with **Reconfigure**, in the **⋮** menu of the connection. The new settings are tested before they are saved. The password field starts empty: leave it empty to keep the current password. When the database refuses the stored username or password, Home Assistant asks you to sign in again; the connection is then updated, not added a second time.
 
 ## Configuration through `configuration.yaml`
 
-YAML keeps working, for the connection's *sensors* specifically: on every start, `configuration.yaml` stays the source of truth for the sensors defined there, and sensors you added through the user interface are left untouched. The `ha_mysql:` connection block itself (host, port, username, password, database) is only read the first time it creates the entry; after that, the entry's connection is yours to manage through **Configure → Change the database connection**, and `configuration.yaml` is not read again for it - so a password rotated through the interface is never silently reverted by a file you forgot to update.
+> **Deprecated.** The YAML configuration stops working in 2.0.0, and Home Assistant says so under **Settings → Repairs**. Nothing is lost when it goes: the connection and its sensors were imported and are stored in Home Assistant already. Remove both the `ha_mysql:` section and the sensors with `platform: ha_mysql` from `configuration.yaml`, restart, and manage them through **Configure** and **Reconfigure** from then on.
+
+Until then YAML keeps working, for the connection's *sensors* specifically: on every start, `configuration.yaml` stays the source of truth for the sensors defined there, and sensors you added through the user interface are left untouched. The `ha_mysql:` connection block itself (host, port, username, password, database) is only read the first time it creates the entry; after that, the entry's connection is yours to manage through **Reconfigure**, and `configuration.yaml` is not read again for it - so a password rotated through the interface is never silently reverted by a file you forgot to update.
 
 ```yaml
 ha_mysql:
@@ -130,7 +134,7 @@ A few things worth knowing:
 | `database` | yes | | Default database for queries that do not name one themselves |
 | Encrypt the connection (TLS) | no | off | User interface only, see [Encrypting the connection](#encrypting-the-connection) |
 
-The first five are read from `configuration.yaml` as well. TLS is a user interface only option: a YAML-imported connection always starts unencrypted and can be turned on afterwards through *Change the database connection*.
+The first five are read from `configuration.yaml` as well. TLS is a user interface only option: a YAML-imported connection always starts unencrypted and can be turned on afterwards through **Reconfigure**.
 
 ### Encrypting the connection
 
@@ -201,6 +205,8 @@ Every sensor exposes these attributes:
 
 The `valueof_` prefix avoids collisions with attributes such as `friendly_name`. A column named `friendly_name` becomes `valueof_friendly_name`.
 
+`json_result`, `json_result_truncated`, `executed_sql_query`, `query_date` and `query_time` are in the current state, but not in the history: the recorder leaves them out. The query time changes on every run, so recording these would store a new copy of the whole result set on every update. The state and the other attributes are recorded as usual.
+
 ### Column types
 
 Most columns come back as the type you would expect. These are converted so they can be stored in a state, in an attribute and in `json_result`:
@@ -217,6 +223,8 @@ Most columns come back as the type you would expect. These are converted so they
 Storing an image or another large binary value in a sensor is a bad idea regardless. Select it as a length or a checksum instead, for example `SELECT LENGTH(photo) AS bytes FROM staff`.
 
 ## Examples
+
+The examples are written as YAML because that is short. Every option is also a field of the sensor form under **Configure**, which is the way to add them now that the YAML configuration is deprecated.
 
 ### Daily energy consumption
 
@@ -428,9 +436,11 @@ logger:
 
 | Message | Cause |
 |---|---|
-| Could not reach the server | Wrong host or port, or a firewall in between. Check with `telnet <host> 3306` from the Home Assistant machine |
-| The server refused the username or password | Wrong credentials, or the user is not allowed to connect from this host. MySQL rights are per host: `'user'@'localhost'` is not the same as `'user'@'%'` |
-| The database does not exist | Wrong database name, or the user has no rights on it |
+| Could not connect | Wrong host or port, a firewall in between, or the server is down or still starting. Home Assistant tries again by itself. Check with `telnet <host> 3306` from the Home Assistant machine |
+| The database refused the username or password | Wrong credentials, for instance after the password was changed on the server. Home Assistant asks you to sign in again |
+| The database does not exist, or its user has no access to it | Wrong database name, or the user has no rights on it. Correct it with **Reconfigure** |
+| The database server refused the connection | Waiting does not fix this, so it is not retried. The message gives the reason: the user may not connect from this host (MySQL rights are per host: `'user'@'localhost'` is not the same as `'user'@'%'`), the account is locked, or its password expired |
+| Set to use TLS, but the server accepted the connection without encrypting it | Configure TLS on the database, or turn the option off with **Reconfigure** |
 
 ### A query is refused with "Only SELECT-style statements are allowed" or "Only one statement is allowed in a query"
 
@@ -452,14 +462,9 @@ Statistics need a numeric state with a `state_class`. Set `value_column` or `val
 
 ### The database or the recorder is growing quickly
 
-`json_result` holds the complete result set and is written on every update. With large results this fills the recorder database. Limit the rows with `max_json_rows`, and keep the attributes out of the recorder:
+Since 1.7.0 the recorder leaves `json_result` and the other bulky attributes out (see [Attributes](#attributes)), so a sensor no longer stores a copy of its result set on every update. Do not exclude the whole sensor from the recorder for this: that also drops its history and its statistics.
 
-```yaml
-recorder:
-  exclude:
-    entity_globs:
-      - sensor.my_mysql_sensor
-```
+A large result still sits in the current state of the sensor, which the user interface loads. Limit it with `max_json_rows`, or narrow the query.
 
 ### The log says the value was cut off
 

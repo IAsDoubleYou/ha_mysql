@@ -49,7 +49,11 @@ def render_value(hass: HomeAssistant, value: Any) -> Any:
     try:
         return template.async_render(parse_result=True)
     except TemplateError as err:
-        raise ServiceValidationError(f"Invalid template in values: {err}") from err
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="invalid_template",
+            translation_placeholders={"error": str(err)},
+        ) from err
 
 
 def render_values(

@@ -9,8 +9,7 @@ from datetime import timedelta
 import decimal
 import json
 import logging
-import ssl
-from typing import Any
+from typing import Any, Final, Literal
 
 import aiomysql
 from pymysql import err as pymysql_err
@@ -18,9 +17,10 @@ from pymysql import err as pymysql_err
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
+from homeassistant.util.ssl import client_context_no_verify
 
 from .const import (
     BINARY_PREVIEW_BYTES,
@@ -50,10 +50,12 @@ _LOGGER = logging.getLogger(__name__)
 # one, such as a refused connection, carries only the message.
 _ERRNO_MESSAGE_ARGS = 2
 
-# PyMySQL error codes that mean the server could not be reached at all. Codes
-# outside this set, including a rejected username or an unknown database,
-# raise the very same OperationalError as a dropped socket does, so the code
-# is what tells the two apart, not the exception class.
+# PyMySQL error codes that say nothing about the settings, only that the
+# server cannot be used right now: it could not be reached or the connection
+# was lost, or it is full or shutting down. Waiting fixes these. Codes outside
+# this set, including a rejected username or an unknown database, raise the
+# very same OperationalError as a dropped socket does, so the code is what
+# tells the two apart, not the exception class.
 _CONNECTIVITY_ERRNOS = frozenset(
     {
         2002,  # Can't connect through the socket file
@@ -64,17 +66,35 @@ _CONNECTIVITY_ERRNOS = frozenset(
         1040,  # Too many connections
         1053,  # Server shutdown in progress
         1152,  # Aborted connection
+        1203,  # This user has more connections than max_user_connections
     }
 )
+
+# MySQL error codes that setup and the forms tell apart from the rest.
+ERRNO_DATABASE_ACCESS_DENIED: Final = 1044
+ERRNO_ACCESS_DENIED: Final = 1045
+ERRNO_UNKNOWN_DATABASE: Final = 1049
+
+type ConnectFailure = Literal[
+    "invalid_auth", "unknown_database", "cannot_connect", "connection_refused"
+]
 
 
 class MySQLError(HomeAssistantError):
     """Base error for the HA MySQL integration."""
 
-    def __init__(self, message: str, errno: int | None = None) -> None:
-        """Keep the driver error code so callers can tell causes apart."""
+    def __init__(
+        self, message: str, errno: int | None = None, detail: str | None = None
+    ) -> None:
+        """Keep the driver error code and message so callers can tell causes apart.
+
+        ``detail`` is what the driver itself said, without the context this
+        integration puts in front of it. The forms and the translated messages
+        show that part.
+        """
         super().__init__(message)
         self.errno = errno
+        self.detail = message if detail is None else detail
 
 
 class MySQLConnectionError(MySQLError):
@@ -105,27 +125,37 @@ def _wrap_error(err: BaseException, target: str) -> MySQLError:
         errno, message = _error_details(err)
         if errno is None or errno in _CONNECTIVITY_ERRNOS:
             return MySQLConnectionError(
-                f"Could not reach MySQL at {target}: {message}", errno
+                f"Could not reach MySQL at {target}: {message}", errno, message
             )
-        return MySQLQueryError(f"Query failed: {message}", errno)
+        return MySQLQueryError(f"Query failed: {message}", errno, message)
     # OSError, and anything else that is not a MySQL protocol error, is always
     # a connectivity problem: the driver never got far enough to send a query.
-    return MySQLConnectionError(f"Could not reach MySQL at {target}: {err}")
+    return MySQLConnectionError(
+        f"Could not reach MySQL at {target}: {err}", detail=str(err)
+    )
 
 
-def _tls_context() -> ssl.SSLContext:
-    """Return the TLS context used for an encrypted connection.
+def classify_connect_error(err: MySQLError) -> ConnectFailure:
+    """Return what a failed attempt to connect means for whoever has to fix it.
 
-    The server certificate is deliberately not checked. A database on a home
-    network nearly always carries a self signed one, and demanding a
-    verifiable certificate would make the option unusable for most setups.
-    This encrypts the traffic, which keeps it from being read off the
-    network; it does not prove the server is the one it claims to be.
+    Setup and the forms both decide by this, so the same answer from the
+    server always gets the same advice:
+
+    - invalid_auth: the username or password was refused; new ones fix it.
+    - unknown_database: the database does not exist or this user may not use
+      it; a new password does not fix that.
+    - cannot_connect: the server cannot be used right now; waiting fixes it.
+    - connection_refused: any other refusal by the server, such as a host the
+      account may not connect from, a locked account or an expired password;
+      waiting does not fix it.
     """
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    return context
+    if isinstance(err, MySQLConnectionError):
+        return "cannot_connect"
+    if err.errno == ERRNO_ACCESS_DENIED:
+        return "invalid_auth"
+    if err.errno in (ERRNO_DATABASE_ACCESS_DENIED, ERRNO_UNKNOWN_DATABASE):
+        return "unknown_database"
+    return "connection_refused"
 
 
 async def _async_verify_tls(connection: aiomysql.Connection) -> None:
@@ -241,8 +271,20 @@ class MySQLConnectionManager:
             # which makes InnoDB return the same snapshot on every poll.
             "autocommit": True,
         }
+        # Left out entirely when TLS is off, which is what keeps aiomysql from
+        # offering it: it only runs the handshake when a context is present.
+        #
+        # The server certificate is deliberately not checked. A database on a
+        # home network nearly always carries a self signed one, and demanding
+        # a verifiable certificate would make the option unusable for most
+        # setups. This encrypts the traffic, which keeps it from being read off
+        # the network; it does not prove the server is the one it claims to be.
+        #
+        # The context comes from Home Assistant, which builds it once and
+        # caches it. Building one here would load the CA bundle from disk on
+        # the event loop. The cached context is shared, so it is not modified.
         if self._use_tls:
-            self._connect_kwargs["ssl"] = _tls_context()
+            self._connect_kwargs["ssl"] = client_context_no_verify()
 
         self._target: str = (
             f"{self._connect_kwargs['host']}:{self._connect_kwargs['port']}"
@@ -306,7 +348,8 @@ class MySQLConnectionManager:
             reusable = True
         except TimeoutError as err:
             raise MySQLConnectionError(
-                f"Timed out reaching MySQL at {self.target}: {err}"
+                f"Timed out reaching MySQL at {self.target}",
+                detail=f"Timed out after {QUERY_TIMEOUT} seconds",
             ) from err
         except (pymysql_err.Error, OSError) as err:
             raise _wrap_error(err, self.target) from err
@@ -334,7 +377,8 @@ class MySQLConnectionManager:
                 connection = await aiomysql.connect(**self._connect_kwargs)
         except TimeoutError as err:
             raise MySQLConnectionError(
-                f"Timed out reaching MySQL at {self.target}: {err}"
+                f"Timed out reaching MySQL at {self.target}",
+                detail=f"Timed out after {QUERY_TIMEOUT} seconds",
             ) from err
         except (pymysql_err.Error, OSError) as err:
             raise _wrap_error(err, self.target) from err
@@ -348,13 +392,31 @@ class MySQLConnectionManager:
                     await cursor.fetchall()
         except TimeoutError as err:
             raise MySQLConnectionError(
-                f"Timed out reaching MySQL at {self.target}: {err}"
+                f"Timed out reaching MySQL at {self.target}",
+                detail=f"Timed out after {QUERY_TIMEOUT} seconds",
             ) from err
         except (pymysql_err.Error, OSError) as err:
             raise _wrap_error(err, self.target) from err
         finally:
             # This connection is not pooled, so this really does close it.
             await connection.ensure_closed()
+
+    async def credentials_refused(self) -> bool:
+        """Return whether the server refuses the stored credentials on a new login.
+
+        Error 1045 on a query does not only mean that: MySQL and MariaDB also
+        answer a statement that needs the FILE privilege, such as SELECT ...
+        INTO OUTFILE, with it. Only a fresh login tells the two apart.
+        Anything else that goes wrong with that login says nothing about the
+        credentials.
+        """
+        try:
+            await self.test_connection()
+        except MySQLQueryError as err:
+            return err.errno == ERRNO_ACCESS_DENIED
+        except MySQLConnectionError, TLSUnavailableError:
+            return False
+        return False
 
     async def close(self) -> None:
         """Close every pooled connection, including the ones still in use.
@@ -397,6 +459,7 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
             ),
         )
         self._manager = manager
+        self._connection_title = config_entry.title
         self._max_json_rows: int = config.get(CONF_MAX_JSON_ROWS, DEFAULT_MAX_JSON_ROWS)
         self._warned_large_result = False
         self.default_query: str = config[CONF_QUERY]
@@ -414,8 +477,33 @@ class MySQLQueryCoordinator(DataUpdateCoordinator[QueryResult]):
 
         try:
             rows = await self._manager.execute(query, values)
-        except MySQLError as err:
-            raise UpdateFailed(str(err)) from err
+        except MySQLQueryError as err:
+            if (
+                err.errno == ERRNO_ACCESS_DENIED
+                and await self._manager.credentials_refused()
+            ):
+                # Raised from here, Home Assistant starts the sign-in flow of
+                # the entry by itself, once however many sensors run into it,
+                # and stops polling until the entry is loaded again.
+                raise ConfigEntryAuthFailed(
+                    translation_domain=DOMAIN,
+                    translation_key="invalid_auth",
+                    translation_placeholders={"connection": self._connection_title},
+                ) from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="query_failed",
+                translation_placeholders={"error": err.detail},
+            ) from err
+        except MySQLConnectionError as err:
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="unreachable",
+                translation_placeholders={
+                    "target": self._manager.target,
+                    "error": err.detail,
+                },
+            ) from err
 
         if not rows:
             return QueryResult(

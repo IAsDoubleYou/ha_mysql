@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-10-22
+
+Error handling, the configuration screens and the translations are brought in line with mysql_query. Nothing changes for automations, scripts or dashboards.
+
+### Added
+
+- **Sign in again when the database refuses the credentials.** Wrong credentials used to fail the connection, which then had to be fixed by hand under **Configure**. Home Assistant now asks for a new username and password and updates the existing connection: at startup, and when a sensor's query is refused because the password was changed on the server. Error 1045 on a query is checked with a fresh login first, because MySQL answers a statement that needs the FILE privilege with the same error.
+- **Reconfigure**, in the **⋮** menu of the connection, changes the host, port, credentials, database and TLS. The new settings are tested before they are saved. The identity of the connection follows a new host or database, but moving onto a database that another connection already uses is refused. A generated title follows the new settings; a title you picked stays.
+- **Repairs warns about the YAML configuration**, which is deprecated (see Deprecated).
+- **Translated messages** for every failure you get to see: why a connection does not start, why a sensor stopped updating, and why `set_query` refused a call. In English and Dutch.
+
+### Changed
+
+- **The connection is no longer changed under Configure.** Configure is for the sensors, Reconfigure for the connection.
+- **A failed connection is told apart by its cause, at startup and in the forms alike.** A server that cannot be reached, is full or is shutting down is retried by Home Assistant. Refused credentials ask for new ones. An unknown database, and any other refusal by the server, such as a host the account may not connect from, a locked account or an expired password, fail the connection with the reason from the server, because waiting does not fix them. On the form such a refusal used to read "Unexpected error". At startup a server that only had too many connections for this user (error 1203) failed the connection; it is now retried.
+- **The bulky attributes are left out of the recorder**: `json_result`, `json_result_truncated`, `executed_sql_query`, `query_date` and `query_time`. The query time changes on every run, so every poll stored a new copy of the result set. They are still in the current state. The README no longer advises excluding the whole sensor from the recorder, which also dropped its history and its statistics.
+- **The actions are registered with the integration**, so `set_query` and `select_record` stay listed while no connection is loaded.
+- A row selected with `select_record` that the result does not have is reported in the log once per selection, instead of on every update.
+- The entry is reloaded by Home Assistant's options flow instead of by an update listener. Home Assistant does not allow an update listener together with the sign-in and reconfigure flows from 2026.12 on.
+
+### Fixed
+
+- **The password is no longer sent to the browser.** The form to change the connection was filled in with the stored password, which put it in the form definition. The password field on Reconfigure starts empty; leave it empty to keep the current password.
+- **Changing the host or database of a connection kept its old identity**, so the old combination could not be added again, and the new one could end up identical to another connection.
+- **A connection with TLS on no longer builds its TLS context on the event loop.** That loaded the certificate bundle from disk there, which Home Assistant reports as a blocking call. The context Home Assistant caches is used instead.
+- A query that timed out was reported without a reason ("Timed out reaching MySQL at host:port/database: "); it now says after how many seconds.
+
+### Deprecated
+
+- **The YAML configuration**, the `ha_mysql:` section and the sensors with `platform: ha_mysql`. It still works in this release and is removed in 2.0.0. The connection and its sensors were imported and are stored in Home Assistant, so removing both from `configuration.yaml` loses nothing; Repairs shows what to do.
+
 ## [1.6.1] - 2026-10-22
 
 ### Fixed

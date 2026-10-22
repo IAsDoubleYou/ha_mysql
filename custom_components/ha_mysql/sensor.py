@@ -8,8 +8,6 @@ from enum import Enum
 import logging
 from typing import TYPE_CHECKING, Any
 
-import voluptuous as vol
-
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -23,11 +21,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError, TemplateError
-from homeassistant.helpers import (
-    config_validation as cv,
-    entity_platform,
-    entity_registry as er,
-)
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.storage import Store
@@ -40,7 +34,6 @@ from .const import (
     ATTR_EXECUTED_QUERY,
     ATTR_JSON_RESULT,
     ATTR_JSON_TRUNCATED,
-    ATTR_PERSIST,
     ATTR_QUERY_DATE,
     ATTR_QUERY_TIME,
     ATTR_ROW_COUNT,
@@ -49,7 +42,6 @@ from .const import (
     CONF_MYSQL_DATABASE,
     CONF_MYSQL_HOST,
     CONF_QUERY,
-    CONF_ROWNUMBER,
     CONF_SENSORS,
     CONF_STATE_CLASS,
     CONF_SUGGESTED_DISPLAY_PRECISION,
@@ -58,35 +50,22 @@ from .const import (
     CONF_VALUE_TEMPLATE,
     DATA_YAML_IMPORTED,
     DOMAIN,
-    SERVICE_SELECT_RECORD,
-    SERVICE_SET_QUERY,
     VALUE_PREFIX,
 )
 from .coordinator import MySQLQueryCoordinator, QueryResult
 from .helpers import rename_keys, render_values
-from .sql import ERROR_MESSAGES, validate_read_only_query
+from .sql import validate_read_only_query
 
 if TYPE_CHECKING:
     from . import HAMySQLConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
-STORAGE_VERSION = 1
+# Every sensor polls through its own coordinator, so Home Assistant does not
+# have to limit how many update at the same time.
+PARALLEL_UPDATES = 0
 
-SET_QUERY_SCHEMA = {
-    vol.Optional(CONF_QUERY): cv.string,
-    # Values bound to the %s placeholders of query. Only scalars are
-    # accepted: those are the types MySQL can bind to a single placeholder.
-    # Strings are allowed to still be templates here, because a call made
-    # straight through the API arrives unrendered.
-    vol.Optional(ATTR_VALUES): vol.All(
-        cv.ensure_list, [vol.Any(None, bool, int, float, str)]
-    ),
-    vol.Optional(ATTR_PERSIST, default=False): cv.boolean,
-}
-SELECT_RECORD_SCHEMA = {
-    vol.Required(CONF_ROWNUMBER): vol.All(vol.Coerce(int), vol.Range(min=0))
-}
+STORAGE_VERSION = 1
 
 
 def _query_store(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> Store:
@@ -115,8 +94,10 @@ async def async_setup_platform(
         return
 
     _LOGGER.error(
-        "No ha_mysql: section found in configuration.yaml; add the database "
-        "settings there or set the integration up through the user interface"
+        "configuration.yaml has ha_mysql sensors but no ha_mysql: section, so "
+        "they are not imported. YAML configuration is deprecated: remove these "
+        "sensors from configuration.yaml and manage them through the user "
+        "interface instead"
     )
 
 
@@ -153,14 +134,6 @@ async def async_setup_entry(
             *(entity.coordinator.async_refresh() for entity in entities)
         )
 
-    platform = entity_platform.async_get_current_platform()
-    platform.async_register_entity_service(
-        SERVICE_SET_QUERY, SET_QUERY_SCHEMA, "async_set_query"
-    )
-    platform.async_register_entity_service(
-        SERVICE_SELECT_RECORD, SELECT_RECORD_SCHEMA, "async_select_record"
-    )
-
     async_add_entities(entities)
 
 
@@ -188,6 +161,19 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
     """
 
     _attr_icon = "mdi:database-search"
+    # Kept out of the recorder, not out of the state. The query time changes
+    # on every poll, so with it recorded every poll stored a new set of
+    # attributes, json_result with its whole result set included. The other
+    # attributes still change only when the result does.
+    _unrecorded_attributes = frozenset(
+        {
+            ATTR_EXECUTED_QUERY,
+            ATTR_JSON_RESULT,
+            ATTR_JSON_TRUNCATED,
+            ATTR_QUERY_DATE,
+            ATTR_QUERY_TIME,
+        }
+    )
     # The device groups every sensor of one connection under a single card;
     # this tells Home Assistant that _attr_name is the sensor's own name, so
     # it is combined with the device name for the entity ID and friendly name
@@ -206,6 +192,8 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         """Initialise the sensor from its stored configuration."""
         super().__init__(coordinator)
         self._selected_row = 0
+        # Reported once per selection instead of on every state write.
+        self._warned_row_out_of_range = False
         self._warned_missing_column = False
         self._warned_bad_value = False
         self._persisted_queries = persisted_queries
@@ -250,13 +238,15 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         if self._selected_row < len(data.rows):
             return self._selected_row
 
-        _LOGGER.warning(
-            "Selected row %s is out of range for %s (%s rows); "
-            "falling back to the first row",
-            self._selected_row,
-            self.entity_id,
-            len(data.rows),
-        )
+        if not self._warned_row_out_of_range:
+            self._warned_row_out_of_range = True
+            _LOGGER.warning(
+                "Selected row %s is out of range for %s (%s rows); "
+                "falling back to the first row",
+                self._selected_row,
+                self.entity_id,
+                len(data.rows),
+            )
         return 0
 
     def _raw_value(self, data: QueryResult) -> Any:
@@ -399,8 +389,8 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         if not query:
             if values:
                 raise ServiceValidationError(
-                    "values requires a new query; there is no query here to "
-                    "bind it to otherwise"
+                    translation_domain=DOMAIN,
+                    translation_key="values_without_query",
                 )
             self.coordinator.query = self.coordinator.default_query
             self.coordinator.query_values = None
@@ -409,7 +399,10 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         else:
             query = query.strip()
             if (error := validate_read_only_query(query)) is not None:
-                raise ServiceValidationError(ERROR_MESSAGES[error])
+                # The keys of the form errors double as the translation keys.
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key=error
+                )
             self.coordinator.query = query
             self.coordinator.query_values = render_values(self.hass, values)
             if persist:
@@ -424,12 +417,14 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
                 await self._store.async_save(self._persisted_queries)
 
         self._selected_row = 0
+        self._warned_row_out_of_range = False
         _LOGGER.debug("New query for %s: %s", self.entity_id, self.coordinator.query)
         await self.coordinator.async_refresh()
 
     async def async_select_record(self, rownumber: int) -> None:
         """Expose the columns of the given row as attributes."""
         self._selected_row = rownumber
+        self._warned_row_out_of_range = False
         _LOGGER.debug("Selected row %s for %s", rownumber, self.entity_id)
         self.async_write_ha_state()
 

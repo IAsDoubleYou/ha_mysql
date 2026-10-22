@@ -17,8 +17,13 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
-from homeassistant.helpers import config_validation as cv
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryError,
+    ConfigEntryNotReady,
+    IntegrationError,
+)
+from homeassistant.helpers import config_validation as cv, issue_registry as ir
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -45,11 +50,22 @@ from .const import (
     PLATFORMS,
     SOURCE_YAML,
 )
-from .coordinator import MySQLConnectionError, MySQLConnectionManager, MySQLQueryError
+from .coordinator import (
+    MySQLConnectionManager,
+    MySQLError,
+    TLSUnavailableError,
+    classify_connect_error,
+)
 from .helpers import generate_unique_id
+from .services import async_setup_services
 from .sql import ERROR_MESSAGES, validate_read_only_query
 
 _LOGGER = logging.getLogger(__name__)
+
+# Where the Repairs notice about the deprecated YAML configuration points to.
+YAML_DOCS_URL = (
+    "https://github.com/IAsDoubleYou/ha_mysql#configuration-through-configurationyaml"
+)
 
 type HAMySQLConfigEntry = ConfigEntry[MySQLConnectionManager]
 
@@ -153,11 +169,30 @@ def _yaml_sensors(config: ConfigType) -> list[dict[str, Any]]:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Import the settings from configuration.yaml, if there are any."""
+    """Register the actions, and import configuration.yaml if it has a section.
+
+    The actions belong to the integration rather than to a connection, so
+    they are registered here, once.
+    """
+    async_setup_services(hass)
+
     if (conf := config.get(DOMAIN)) is None:
         return True
 
     hass.data.setdefault(DOMAIN, {})[DATA_YAML_IMPORTED] = True
+
+    # Still imported for this release; 2.0.0 drops the YAML configuration.
+    # The connection and its sensors are config entry data by now, so taking
+    # the section out loses nothing. Repairs says so until it is gone.
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        "deprecated_yaml",
+        is_fixable=False,
+        learn_more_url=YAML_DOCS_URL,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="deprecated_yaml",
+    )
 
     sensors = _yaml_sensors(config)
     if not sensors:
@@ -176,20 +211,61 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+def _setup_error(entry: HAMySQLConfigEntry, err: MySQLError) -> IntegrationError:
+    """Return the exception that tells Home Assistant why setup failed.
+
+    The cause decides what Home Assistant does next. A server that cannot be
+    reached right now (down, still booting, network not up yet) is worth
+    retrying, which ConfigEntryNotReady makes Home Assistant do on its own.
+    Refused credentials start the sign-in flow, because only the user can fix
+    those. A database that does not exist, or that this user may not use, is
+    not fixed by a new password and not by waiting, so it is a plain error.
+    So is any other refusal by the server, such as a host the account may not
+    connect from or a locked account: retrying those would go on forever.
+
+    The forms decide by the same classify_connect_error, so a failure gets the
+    same advice in both places. Home Assistant logs the exception it is given,
+    so nothing is logged here.
+    """
+    failure = classify_connect_error(err)
+    # The kinds of failure double as the translation keys of their messages.
+    kwargs: dict[str, Any] = {
+        "translation_domain": DOMAIN,
+        "translation_key": failure,
+        "translation_placeholders": {
+            "connection": entry.title,
+            "error": err.detail or type(err).__name__,
+        },
+    }
+
+    if failure == "invalid_auth":
+        return ConfigEntryAuthFailed(**kwargs)
+    if failure == "cannot_connect":
+        return ConfigEntryNotReady(**kwargs)
+    return ConfigEntryError(**kwargs)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> bool:
-    """Set up a MySQL connection and its sensors."""
+    """Set up a MySQL connection and its sensors.
+
+    There is no update listener: the options flow reloads the entry when the
+    sensors changed, the sign-in and reconfigure flows reload it themselves,
+    and so does the YAML import when it changed the sensor list.
+    """
     manager = MySQLConnectionManager(dict(entry.data))
 
     try:
         await manager.test_connection()
-    except MySQLQueryError as err:
-        # Wrong credentials or a missing database will not fix themselves.
-        raise ConfigEntryError(str(err)) from err
-    except MySQLConnectionError as err:
-        raise ConfigEntryNotReady(str(err)) from err
+    except TLSUnavailableError as err:
+        raise ConfigEntryError(
+            translation_domain=DOMAIN,
+            translation_key="tls_unavailable",
+            translation_placeholders={"connection": entry.title},
+        ) from err
+    except MySQLError as err:
+        raise _setup_error(entry, err) from err
 
     entry.runtime_data = manager
-    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -200,8 +276,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> 
     if unloaded:
         await entry.runtime_data.close()
     return unloaded
-
-
-async def _async_reload_entry(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> None:
-    """Reload the entry after its options changed."""
-    await hass.config_entries.async_reload(entry.entry_id)

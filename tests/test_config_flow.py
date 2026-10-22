@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntryState, ConfigFlowResult
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
 
@@ -17,12 +21,17 @@ from .conftest import (
     UNIQUE_ID,
     FakeConnection,
     FakePool,
+    driver_error,
     make_entry,
     make_sensor,
     setup_entry,
 )
 from custom_components.ha_mysql.const import DOMAIN
-from custom_components.ha_mysql.coordinator import MySQLConnectionError, MySQLQueryError
+from custom_components.ha_mysql.coordinator import (
+    MySQLConnectionError,
+    MySQLQueryError,
+    TLSUnavailableError,
+)
 
 USER_INPUT = {
     "host": "db.local",
@@ -113,6 +122,21 @@ async def test_user_flow_unknown_database(hass: HomeAssistant, mock_execute) -> 
     assert result["errors"] == {"base": "unknown_database"}
 
 
+async def test_user_flow_tls_unavailable(hass: HomeAssistant, mock_execute) -> None:
+    """A server that accepts the connection without encrypting it is refused."""
+    mock_execute.side_effect = TLSUnavailableError("not encrypted")
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**USER_INPUT, "use_tls": True}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "tls_unavailable"}
+
+
 async def test_user_flow_unexpected_error(hass: HomeAssistant, mock_execute) -> None:
     """An unexpected error shows what actually went wrong."""
     mock_execute.side_effect = RuntimeError("the driver exploded")
@@ -129,13 +153,23 @@ async def test_user_flow_unexpected_error(hass: HomeAssistant, mock_execute) -> 
     assert result["description_placeholders"]["error"] == "the driver exploded"
 
 
-async def test_user_flow_unexpected_database_error(
-    hass: HomeAssistant, mock_execute
+@pytest.mark.parametrize(
+    ("errno", "message"),
+    [
+        (1130, "Host '10.0.0.5' is not allowed to connect to this MySQL server"),
+        (3118, "Access denied for user 'user'. Account is locked."),
+        (1142, "SELECT command denied to user"),
+    ],
+)
+async def test_user_flow_refused_connection(
+    hass: HomeAssistant, mock_execute, errno: int, message: str
 ) -> None:
-    """A database error without its own message keeps the driver text."""
-    mock_execute.side_effect = MySQLQueryError(
-        "Query failed: 1142 (42000): SELECT command denied to user", 1142
-    )
+    """Any other refusal by the server is shown with the reason it gave.
+
+    Waiting does not fix these, so they are not reported as a server that
+    cannot be reached; the reason says what has to change.
+    """
+    mock_execute.side_effect = driver_error(errno, message)
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -145,10 +179,8 @@ async def test_user_flow_unexpected_database_error(
     )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "unknown"}
-    assert result["description_placeholders"]["error"] == (
-        "1142 (42000): SELECT command denied to user"
-    )
+    assert result["errors"] == {"base": "connection_refused"}
+    assert result["description_placeholders"]["error"] == message
 
 
 async def test_user_flow_long_error_is_shortened(
@@ -318,9 +350,7 @@ async def test_options_add_sensor_invalid_query(
         result["flow_id"], {"next_step_id": "add_sensor"}
     )
 
-    mock_execute.side_effect = MySQLQueryError(
-        "Query failed: 1146 (42S02): Table 'testdb.dept' doesn't exist", 1146
-    )
+    mock_execute.side_effect = driver_error(1146, "Table 'testdb.dept' doesn't exist")
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], NEW_SENSOR
     )
@@ -328,7 +358,7 @@ async def test_options_add_sensor_invalid_query(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"query": "query_failed"}
     assert result["description_placeholders"]["error"] == (
-        "1146 (42S02): Table 'testdb.dept' doesn't exist"
+        "Table 'testdb.dept' doesn't exist"
     )
     assert entry.options["sensors"] == []
 
@@ -345,7 +375,7 @@ async def test_options_add_sensor_query_recovers(
         result["flow_id"], {"next_step_id": "add_sensor"}
     )
 
-    mock_execute.side_effect = MySQLQueryError("Query failed: syntax error", 1064)
+    mock_execute.side_effect = driver_error(1064, "syntax error")
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], NEW_SENSOR
     )
@@ -621,8 +651,8 @@ async def test_options_edit_sensor_invalid_query(
         result["flow_id"], {"unique_id": "ha_mysql_employees"}
     )
 
-    mock_execute.side_effect = MySQLQueryError(
-        "Query failed: 1054 (42S22): Unknown column 'activ' in 'where clause'", 1054
+    mock_execute.side_effect = driver_error(
+        1054, "Unknown column 'activ' in 'where clause'"
     )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -638,7 +668,7 @@ async def test_options_edit_sensor_invalid_query(
     assert result["step_id"] == "edit_sensor"
     assert result["errors"] == {"query": "query_failed"}
     assert result["description_placeholders"]["error"] == (
-        "1054 (42S22): Unknown column 'activ' in 'where clause'"
+        "Unknown column 'activ' in 'where clause'"
     )
     assert entry.options["sensors"][0]["query"] == "SELECT * FROM emp"
     assert entry.options["sensors"][0]["scan_interval"] == 30
@@ -735,141 +765,222 @@ async def test_options_menu_without_sensors(hass: HomeAssistant, mock_execute) -
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
-    assert result["menu_options"] == ["add_sensor", "edit_connection"]
+    assert result["menu_options"] == ["add_sensor"]
 
 
 async def test_options_menu_with_sensors(hass: HomeAssistant, mock_execute) -> None:
-    """Changing the connection is always offered, sensors or not."""
+    """The connection itself is not changed here any more: that is Reconfigure."""
     entry = make_entry()
     await setup_entry(hass, entry)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
-    assert result["menu_options"] == [
-        "add_sensor",
-        "select_sensor",
-        "remove_sensor",
-        "edit_connection",
-    ]
+    assert result["menu_options"] == ["add_sensor", "select_sensor", "remove_sensor"]
 
 
-async def test_options_edit_connection(hass: HomeAssistant, mock_execute) -> None:
-    """A working new connection replaces the stored one and reloads the entry."""
+def _suggested(result: ConfigFlowResult) -> dict[str, Any]:
+    """Return the values a form suggests, by field."""
+    return {
+        str(field.schema): field.description["suggested_value"]
+        for field in result["data_schema"].schema
+        if field.description and "suggested_value" in field.description
+    }
+
+
+async def test_reconfigure_changes_the_connection(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """New settings are tried, saved, and the entry is loaded again with them.
+
+    The identity of the entry follows the new host, and so does the title it
+    got when it was added. The sensors are left alone, and a password field
+    left empty keeps the stored password.
+    """
     entry = make_entry()
     await setup_entry(hass, entry)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"next_step_id": "edit_connection"}
-    )
-    assert result["step_id"] == "edit_connection"
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["step_id"] == "reconfigure"
 
-    new_connection = {**USER_INPUT, "host": "other.local"}
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], new_connection
+    without_password = {k: v for k, v in USER_INPUT.items() if k != "password"}
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**without_password, "host": "other.local"}
     )
     await hass.async_block_till_done()
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.data["host"] == "other.local"
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data == {**CONNECTION, "host": "other.local"}
+    assert entry.unique_id == "other.local:3306/testdb"
     assert entry.title == "testdb @ other.local"
-    # The unique ID is left alone, same as the sensors: only the connection
-    # itself is being changed here.
-    assert entry.unique_id == UNIQUE_ID
-    # The sensors are still there: changing the connection must not wipe them.
     assert entry.options["sensors"] == [SENSOR]
+    assert entry.state is ConfigEntryState.LOADED
 
 
-async def test_options_edit_connection_prefilled(
+async def test_reconfigure_does_not_send_the_password(
     hass: HomeAssistant, mock_execute
 ) -> None:
-    """The form starts out with the settings the entry already has."""
+    """The form shows the stored settings, but never the stored password.
+
+    A suggested value or a default would put the password in the form
+    definition that goes to the browser.
+    """
     entry = make_entry()
     await setup_entry(hass, entry)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"next_step_id": "edit_connection"}
-    )
+    result = await entry.start_reconfigure_flow(hass)
 
-    suggested = {
-        key: value.get("suggested_value")
-        for key, value in (
-            (field.schema, field.description) for field in result["data_schema"].schema
-        )
-        if value
+    assert _suggested(result) == {
+        key: value for key, value in CONNECTION.items() if key != "password"
     }
-    assert suggested == CONNECTION
+    password = next(
+        field for field in result["data_schema"].schema if str(field) == "password"
+    )
+    assert password.default is vol.UNDEFINED
 
 
-async def test_options_edit_connection_cannot_connect(
+async def test_reconfigure_with_a_new_password(
     hass: HomeAssistant, mock_execute
 ) -> None:
-    """A broken new connection is reported and the old one is kept."""
+    """A password that is filled in replaces the stored one."""
     entry = make_entry()
     await setup_entry(hass, entry)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"next_step_id": "edit_connection"}
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**USER_INPUT, "password": "rotated"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data["password"] == "rotated"
+    assert entry.unique_id == UNIQUE_ID
+
+
+async def test_reconfigure_keeps_a_title_of_your_own(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Only the generated title follows the connection; a chosen one stays."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Production",
+        data=CONNECTION,
+        options={"sensors": [SENSOR]},
+        unique_id=UNIQUE_ID,
+    )
+    await setup_entry(hass, entry)
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**USER_INPUT, "host": "other.local"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.title == "Production"
+    assert entry.unique_id == "other.local:3306/testdb"
+
+
+async def test_reconfigure_refuses_another_connection(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Moving onto a database that is already set up is refused."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        title="testdb @ other.local",
+        data={**CONNECTION, "host": "other.local"},
+        options={"sensors": []},
+        unique_id="other.local:3306/testdb",
+    )
+    other.add_to_hass(hass)
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**USER_INPUT, "host": "other.local"}
     )
 
-    mock_execute.side_effect = MySQLConnectionError("no route")
-    result = await hass.config_entries.options.async_configure(
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert entry.data == CONNECTION
+    assert entry.unique_id == UNIQUE_ID
+
+
+async def test_reconfigure_reports_a_failed_connection(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Settings that do not work are not saved, and the form says why."""
+    entry = make_entry()
+    await setup_entry(hass, entry)
+
+    result = await entry.start_reconfigure_flow(hass)
+    mock_execute.side_effect = driver_error(
+        2003, "Can't connect to MySQL server on 'other.local'"
+    )
+    result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**USER_INPUT, "host": "other.local"}
     )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "edit_connection"
+    assert result["step_id"] == "reconfigure"
     assert result["errors"] == {"base": "cannot_connect"}
-    assert entry.data["host"] == "db.local"
+    assert "other.local" in result["description_placeholders"]["error"]
+    assert entry.data == CONNECTION
+
+    mock_execute.side_effect = None
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**USER_INPUT, "host": "other.local"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data["host"] == "other.local"
 
 
-async def test_options_edit_connection_invalid_auth(
+async def test_reauth_updates_the_credentials(
     hass: HomeAssistant, mock_execute
 ) -> None:
-    """Wrong credentials are reported as such, and the old ones are kept."""
+    """Refused credentials start the sign-in flow, which repairs the entry."""
+    mock_execute.side_effect = driver_error(1045, "Access denied for user 'user'")
     entry = make_entry()
     await setup_entry(hass, entry)
+    assert entry.state is ConfigEntryState.SETUP_ERROR
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"next_step_id": "edit_connection"}
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert len(flows) == 1
+    assert flows[0]["context"]["source"] == config_entries.SOURCE_REAUTH
+    assert flows[0]["step_id"] == "reauth_confirm"
+
+    mock_execute.side_effect = None
+    result = await hass.config_entries.flow.async_configure(
+        flows[0]["flow_id"], {"username": "user", "password": "rotated"}
     )
+    await hass.async_block_till_done()
 
-    mock_execute.side_effect = MySQLQueryError("Access denied", 1045)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {**USER_INPUT, "password": "wrong"}
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data == {**CONNECTION, "password": "rotated"}
+    assert entry.state is ConfigEntryState.LOADED
+
+
+async def test_reauth_keeps_asking_while_refused(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """The form names the connection, and stays until the server says yes."""
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    result = await entry.start_reauth_flow(hass)
+    assert result["step_id"] == "reauth_confirm"
+    assert result["description_placeholders"]["connection"] == "testdb @ db.local"
+    assert _suggested(result) == {"username": "user"}
+
+    mock_execute.side_effect = driver_error(1045, "Access denied for user 'user'")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"username": "user", "password": "wrong"}
     )
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_auth"}
-    assert entry.data["password"] == "secret"
-
-
-async def test_options_edit_connection_recovers(
-    hass: HomeAssistant, mock_execute
-) -> None:
-    """The form can be submitted again once the new settings are correct."""
-    entry = make_entry()
-    await setup_entry(hass, entry)
-
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"next_step_id": "edit_connection"}
-    )
-
-    mock_execute.side_effect = MySQLConnectionError("no route")
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {**USER_INPUT, "host": "other.local"}
-    )
-    assert result["errors"] == {"base": "cannot_connect"}
-
-    mock_execute.side_effect = None
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {**USER_INPUT, "host": "other.local"}
-    )
-    await hass.async_block_till_done()
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.data["host"] == "other.local"
+    assert entry.data == CONNECTION
