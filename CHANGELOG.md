@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-10-24
+
+Diagnostics for the connection. Nothing changes for a connection or a sensor that is already set up.
+
+### Added
+
+- **Download diagnostics** from the menu of the connection. The file holds the connection settings, the configuration and the queries of every sensor, the figures of the last run of each sensor and the size of the connection pool. The host, port, username, password and database name are masked, and so are the title and the unique ID of the connection. No row of the database and no entity ID is included. The queries are, so read them before sharing the file.
+
 ## [2.1.0] - 2026-10-24
 
 The integration moves to the validation library Home Assistant itself switched to, and the code is now fully type checked. Nothing changes for a connection or a sensor that is already set up.
@@ -283,6 +291,7 @@ keep the entity IDs and the history they already had.
 See the [releases page](https://github.com/IAsDoubleYou/ha_mysql/releases) for
 the notes of 1.0.3 and older.
 
+[2.2.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.2.0
 [2.1.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.1.0
 [2.0.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.0.0
 [1.7.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.7.0

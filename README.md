@@ -411,6 +411,12 @@ data:
 
 A row number beyond the result set falls back to the first row and is reported in the log.
 
+## Diagnostics
+
+When you report a problem, download the diagnostics of the connection: **Settings** > **Devices & services** > **HA MySQL** > the **⋮** menu of the connection > **Download diagnostics**. The file holds the connection settings, the configuration and the queries of every sensor, the figures of the last run of each sensor and the size of the connection pool.
+
+The host, port, username, password and database name are masked, and so are the title and the unique ID of the connection, which are built from them. No row of the database is included. **The queries are**, because they are usually what needs looking at, so read them before you share the file.
+
 ## Troubleshooting
 
 ### The sensor is `unavailable`
