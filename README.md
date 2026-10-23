@@ -21,6 +21,17 @@ Every sensor runs its own query on its own interval. The result is available in 
 
 Queries can be replaced at runtime with the [`ha_mysql.set_query`](#ha_mysqlset_query) action, which makes it possible to build queries that depend on information only known at runtime.
 
+## Key Features
+
+- **UI configuration**: add a connection and its sensors from the user interface, change the connection later with **Reconfigure**, and sign in again from a prompt when the database refuses the credentials.
+- **One sensor per query**: each sensor runs its own query on its own interval, and reports the state, the columns of one row and the whole result set.
+- **Read only by design**: queries are checked before they run, and every session the integration opens is read only, so the database refuses a write whatever the query says.
+- **Queries that change at runtime**: replace a query with `ha_mysql.set_query`, pass values separately with `%s` placeholders, and step through the rows with `ha_mysql.select_record`.
+- **Robust**: one shared pool per connection, a connection the server dropped is rebuilt by itself, and queries never block Home Assistant.
+- **Multiple databases**: add the integration once per database.
+- **Optional TLS**: encrypt the connection, with a refusal instead of a silent fallback to plain text.
+- **JSON-safe results**: MySQL types such as `DECIMAL`, `DATE` and `TIME` are converted automatically.
+
 ## What is the state of the sensor?
 
 **By default the state is the number of rows the query returned**, not a value from the result set. This surprises most people at first, so it is worth repeating.
@@ -484,6 +495,14 @@ Two integrations, two different jobs. They can be installed side by side.
 | History and statistics | Yes, through the sensor | No |
 | Writing to the database | No, `SELECT` only | Yes, `INSERT`, `UPDATE` and `DELETE` as well |
 | Best for | Values you want to follow continuously, dashboards, the energy dashboard | Lookups on demand, queries with runtime parameters, changing data |
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a full list of changes per version, including the migration steps of older releases, and the [GitHub releases](https://github.com/IAsDoubleYou/ha_mysql/releases) for the release notes.
+
+## Support
+
+If you enjoy using this integration, please consider giving it a ⭐ on [GitHub](https://github.com/IAsDoubleYou/ha_mysql)! It costs nothing, shows your appreciation, and helps other Home Assistant users find this integration more easily.
 
 [hacs_shield]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square
 [hacs]: https://github.com/hacs/integration
