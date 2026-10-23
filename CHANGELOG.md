@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.7.0] - 2026-10-22
+## [1.7.0] - 2026-10-23
 
 Error handling, the configuration screens and the translations are brought in line with mysql_query, and a leak in the connection pool is fixed. Automations, scripts and dashboards keep working as they are. Versions 1.6.0 and 1.6.1 were never released and are part of this one.
 
@@ -258,6 +258,8 @@ keep the entity IDs and the history they already had.
 See the [releases page](https://github.com/IAsDoubleYou/ha_mysql/releases) for
 the notes of 1.0.3 and older.
 
+[1.7.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.7.0
+[1.5.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.5.0
 [1.4.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.4.0
 [1.3.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.3.0
 [1.2.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.2.0
