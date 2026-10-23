@@ -6,7 +6,7 @@ import asyncio
 from datetime import date, datetime
 from enum import Enum
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -67,7 +67,9 @@ PARALLEL_UPDATES = 0
 STORAGE_VERSION = 1
 
 
-def _query_store(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> Store:
+def _query_store(
+    hass: HomeAssistant, entry: HAMySQLConfigEntry
+) -> Store[dict[str, Any]]:
     """Return the store holding this entry's persisted set_query overrides.
 
     Deliberately separate from the config entry's own options: writing here
@@ -164,7 +166,7 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         entry: HAMySQLConfigEntry,
         config: dict[str, Any],
         persisted_queries: dict[str, dict[str, Any]],
-        store: Store,
+        store: Store[dict[str, Any]],
     ) -> None:
         """Initialise the sensor from its stored configuration."""
         super().__init__(coordinator)
@@ -177,7 +179,8 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
         self._store = store
 
         self._attr_name = config[CONF_NAME]
-        self._attr_unique_id = config[CONF_UNIQUE_ID]
+        self._sensor_id: str = config[CONF_UNIQUE_ID]
+        self._attr_unique_id = self._sensor_id
         self._value_column: str | None = config.get(CONF_VALUE_COLUMN)
         self._attr_native_unit_of_measurement = config.get(CONF_UNIT_OF_MEASUREMENT)
         self._attr_suggested_display_precision = config.get(
@@ -308,19 +311,21 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
                 )
             return value[:MAX_LENGTH_STATE_STATE]
 
-        return value
+        return cast("StateType | date | datetime", value)
 
     @property
     def native_value(self) -> StateType | date | datetime:
         """Return the row count, or the configured column or template value."""
-        if (data := self.coordinator.data) is None:
+        data: QueryResult | None = self.coordinator.data
+        if data is None:
             return None
         return self._convert(self._raw_value(data))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the query metadata and the columns of the selected row."""
-        if (data := self.coordinator.data) is None:
+        data: QueryResult | None = self.coordinator.data
+        if data is None:
             return {}
 
         attributes: dict[str, Any] = {}
@@ -371,7 +376,7 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
                 )
             self.coordinator.query = self.coordinator.default_query
             self.coordinator.query_values = None
-            if self._persisted_queries.pop(self._attr_unique_id, None) is not None:
+            if self._persisted_queries.pop(self._sensor_id, None) is not None:
                 await self._store.async_save(self._persisted_queries)
         else:
             query = query.strip()
@@ -386,7 +391,7 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
             # call arrives, and a value that still reads "{{ ... }}" is data.
             self.coordinator.query_values = tuple(values) if values else None
             if persist:
-                self._persisted_queries[self._attr_unique_id] = {
+                self._persisted_queries[self._sensor_id] = {
                     CONF_QUERY: self.coordinator.query,
                     ATTR_VALUES: (
                         list(self.coordinator.query_values)

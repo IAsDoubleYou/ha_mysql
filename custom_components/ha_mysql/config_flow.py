@@ -29,6 +29,7 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -463,10 +464,13 @@ class HAMySQLOptionsFlow(OptionsFlowWithReload):
         The manager of a loaded entry is reused, so testing a query does not
         open connections beyond the pool the sensors already share.
         """
-        manager = getattr(self.config_entry, "runtime_data", None)
-        borrowed = isinstance(manager, MySQLConnectionManager)
-        if not borrowed:
-            manager = MySQLConnectionManager(dict(self.config_entry.data))
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        borrowed = isinstance(runtime_data, MySQLConnectionManager)
+        manager = (
+            runtime_data
+            if isinstance(runtime_data, MySQLConnectionManager)
+            else MySQLConnectionManager(dict(self.config_entry.data))
+        )
 
         try:
             rows = await manager.execute(query)
@@ -561,10 +565,10 @@ class HAMySQLOptionsFlow(OptionsFlowWithReload):
                     probatio.Required(CONF_UNIQUE_ID): SelectSelector(
                         SelectSelectorConfig(
                             options=[
-                                {
-                                    "value": sensor[CONF_UNIQUE_ID],
-                                    "label": sensor[CONF_NAME],
-                                }
+                                SelectOptionDict(
+                                    value=sensor[CONF_UNIQUE_ID],
+                                    label=sensor[CONF_NAME],
+                                )
                                 for sensor in self._sensors
                             ],
                             mode=SelectSelectorMode.DROPDOWN,
@@ -645,10 +649,10 @@ class HAMySQLOptionsFlow(OptionsFlowWithReload):
                     probatio.Required(CONF_SENSORS): SelectSelector(
                         SelectSelectorConfig(
                             options=[
-                                {
-                                    "value": sensor[CONF_UNIQUE_ID],
-                                    "label": sensor[CONF_NAME],
-                                }
+                                SelectOptionDict(
+                                    value=sensor[CONF_UNIQUE_ID],
+                                    label=sensor[CONF_NAME],
+                                )
                                 for sensor in self._sensors
                             ],
                             mode=SelectSelectorMode.LIST,
@@ -668,6 +672,6 @@ def _connection_id(connection: dict[str, Any]) -> str:
     )
 
 
-def _entry_title(connection: dict[str, Any]) -> str:
+def _entry_title(connection: Mapping[str, Any]) -> str:
     """Return the title shown on the integration card."""
     return f"{connection[CONF_MYSQL_DATABASE]} @ {connection[CONF_MYSQL_HOST]}"

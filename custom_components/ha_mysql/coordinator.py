@@ -116,7 +116,7 @@ class TLSUnavailableError(HomeAssistantError):
 
 def _error_details(err: BaseException) -> tuple[int | None, str]:
     """Split a driver error into its MySQL error number and message."""
-    args = getattr(err, "args", ())
+    args: tuple[Any, ...] = err.args
     if len(args) >= _ERRNO_MESSAGE_ARGS and isinstance(args[0], int):
         return args[0], str(args[1])
     if len(args) == 1:

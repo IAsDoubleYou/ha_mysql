@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import probatio
 
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
@@ -18,7 +20,7 @@ from .const import (
     SERVICE_SET_QUERY,
 )
 
-SET_QUERY_SCHEMA = {
+SET_QUERY_SCHEMA: dict[str | probatio.Marker, Any] = {
     probatio.Optional(CONF_QUERY): cv.string,
     # Values bound to the %s placeholders of query. Only scalars are
     # accepted: those are the types MySQL can bind to a single placeholder.
@@ -27,7 +29,7 @@ SET_QUERY_SCHEMA = {
     ),
     probatio.Optional(ATTR_PERSIST, default=False): cv.boolean,
 }
-SELECT_RECORD_SCHEMA = {
+SELECT_RECORD_SCHEMA: dict[str | probatio.Marker, Any] = {
     probatio.Required(CONF_ROWNUMBER): probatio.All(
         probatio.Coerce(int), probatio.Range(min=0)
     )
