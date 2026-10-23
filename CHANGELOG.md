@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-10-23
+
+This release is about trust: every connection is opened read only, the YAML configuration is gone, and a value you pass to `set_query` is exactly what reaches the database. It is a major release because the last two change behaviour. A connection and its sensors set up through the user interface, or imported from YAML by an earlier release, keep working.
+
+### Changed
+
+- **Every database session is opened read only.** The driver runs `SET SESSION TRANSACTION READ ONLY` after each login, for the pool, for the connection the integration makes again after the server dropped an idle one, and for the check made while setting up. The database itself now refuses an `INSERT`, an `UPDATE`, a `DELETE` and a temporary table with error 1792, whatever the query says. It sits behind the check on the query text, which keeps refusing anything but a single reading statement, `SET` included, so a query cannot lift it. The rights of the database user remain the real boundary: a `SELECT` can still write a file through `INTO OUTFILE` if the user has the `FILE` privilege.
+- **`set_query` binds `values` exactly as given.** Home Assistant already renders the templates of an automation or a script before an action runs, and the integration used to render the result a second time. A value that still reads `{{ ... }}` when it arrives, as it can through the REST API, is now bound as that text instead of being evaluated. Automations and scripts are not affected.
+- Home Assistant 2026.3.0 or newer is still required.
+
+### Removed
+
+- **The YAML configuration**, deprecated in 1.7.0: the `ha_mysql:` section and the sensors with `platform: ha_mysql` in `configuration.yaml`. Home Assistant reports them while they are there. The connection and the sensors that earlier releases imported are stored in Home Assistant and keep their entity IDs and history; a change made in `configuration.yaml` after the last start with an earlier release is not in them, so look at the sensors under **Configure**. A YAML configuration that was never imported is not picked up: add it through the user interface.
+- The Repairs issue 1.7.0 raised for the YAML configuration is removed on the first start.
+- Config entries move to version 2, which drops the `source` marker the import left on sensors. After this release, Home Assistant refuses to load the entries with 1.7.0 or older, so a downgrade needs a backup.
+
 ## [1.7.0] - 2026-10-23
 
 Error handling, the configuration screens and the translations are brought in line with mysql_query, and a leak in the connection pool is fixed. Automations, scripts and dashboards keep working as they are. Versions 1.6.0 and 1.6.1 were never released and are part of this one.
@@ -258,6 +274,7 @@ keep the entity IDs and the history they already had.
 See the [releases page](https://github.com/IAsDoubleYou/ha_mysql/releases) for
 the notes of 1.0.3 and older.
 
+[2.0.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.0.0
 [1.7.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.7.0
 [1.5.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.5.0
 [1.4.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.4.0
