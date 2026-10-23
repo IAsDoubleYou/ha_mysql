@@ -214,6 +214,29 @@ def test_validate_read_only_query_checks_statement_count_first() -> None:
     assert error == "query_multiple_statements"
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("SET SESSION TRANSACTION READ WRITE", "query_not_read_only"),
+        ("SET GLOBAL TRANSACTION READ WRITE", "query_not_read_only"),
+        ("SET TRANSACTION READ WRITE", "query_not_read_only"),
+        ("set session transaction read write", "query_not_read_only"),
+        ("SET SESSION transaction_read_only = OFF", "query_not_read_only"),
+        ("START TRANSACTION READ WRITE", "query_not_read_only"),
+        ("/* note */ SET SESSION TRANSACTION READ WRITE", "query_not_read_only"),
+        ("SELECT 1; SET SESSION TRANSACTION READ WRITE", "query_multiple_statements"),
+    ],
+)
+def test_a_query_cannot_change_the_transaction_mode(query: str, expected: str) -> None:
+    """A query never gets to change how the session or its transactions run.
+
+    A sensor only reads, so a SET has no place in one. SET is not on the list
+    of reading statements, so its first keyword already refuses it, and one
+    put behind a SELECT is refused as a second statement.
+    """
+    assert validate_read_only_query(query) == expected
+
+
 def test_error_messages_cover_every_error_key() -> None:
     """Every error validate_read_only_query can return has readable text."""
     for query in ("DELETE FROM emp", "SELECT 1; DROP TABLE emp"):
