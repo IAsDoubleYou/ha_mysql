@@ -223,24 +223,13 @@ def is_read_only(statement: str) -> bool:
     return first_keyword(inner) in READ_ONLY_KEYWORDS
 
 
-# Human-readable text for the error keys validate_read_only_query returns,
-# for callers that report the problem directly instead of through a config
-# flow's translated form errors.
-ERROR_MESSAGES: Final[dict[str, str]] = {
-    "query_multiple_statements": "Only one statement is allowed in a query.",
-    "query_not_read_only": (
-        "Only SELECT-style statements are allowed; ha_mysql only reads the database."
-    ),
-}
-
-
 def validate_read_only_query(query: str) -> str | None:
     """Return the error key when ``query`` is not a single read-only statement.
 
     Returns None when the query is fine. This integration only ever reads,
-    so every entry point a query can come through — the config flow, a YAML
-    import and the set_query action — runs a query through here before it is
-    stored or executed.
+    so every entry point a query can come through, the config flow and the
+    set_query action, runs a query through here before it is stored or
+    executed.
 
     Checking the statement count first matters: a check that only looks at
     the first keyword would let "SELECT 1; DROP TABLE t" through, and a

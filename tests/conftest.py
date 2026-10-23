@@ -12,27 +12,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.ha_mysql.const import DOMAIN
+from custom_components.ha_mysql.const import CONFIG_ENTRY_VERSION, DOMAIN
 from custom_components.ha_mysql.coordinator import MySQLError, _wrap_error
 
 pytest_plugins = "pytest_homeassistant_custom_component"
-
-# What a user puts in configuration.yaml.
-CONFIG = {
-    "ha_mysql": {
-        "host": "db.local",
-        "username": "user",
-        "password": "secret",
-        "database": "testdb",
-    },
-    "sensor": [
-        {
-            "platform": "ha_mysql",
-            "name": "Employees",
-            "query": "SELECT * FROM emp",
-        }
-    ],
-}
 
 CONNECTION = {
     "host": "db.local",
@@ -213,6 +196,7 @@ def make_entry(sensors: list[dict[str, Any]] | None = None) -> MockConfigEntry:
         data=CONNECTION,
         options={"sensors": sensors if sensors is not None else [SENSOR]},
         unique_id=UNIQUE_ID,
+        version=CONFIG_ENTRY_VERSION,
     )
 
 

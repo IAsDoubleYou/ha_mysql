@@ -9,20 +9,16 @@ from homeassistant.const import Platform
 
 DOMAIN: Final = "ha_mysql"
 PLATFORMS: Final = [Platform.SENSOR]
+# Version of the config entry data. 2 dropped the source marker that sensors
+# imported from configuration.yaml carried.
+CONFIG_ENTRY_VERSION: Final = 2
 
-# Connection keys, shared by configuration.yaml and the config entry.
+# Connection keys of the config entry.
 CONF_MYSQL_HOST: Final = "host"
 CONF_MYSQL_PORT: Final = "port"
 CONF_MYSQL_USERNAME: Final = "username"
 CONF_MYSQL_PASSWORD: Final = "password"
 CONF_MYSQL_DATABASE: Final = "database"
-
-# Key used to carry the connection settings through the import flow.
-CONF_CONNECTION: Final = "connection"
-
-# hass.data flag telling the sensor platform that configuration.yaml was found
-# and imported, so it does not have to report a missing ha_mysql: section.
-DATA_YAML_IMPORTED: Final = "yaml_imported"
 
 # Sensor keys.
 CONF_SENSORS: Final = "sensors"
@@ -37,11 +33,6 @@ CONF_VALUE_TEMPLATE: Final = "value_template"
 CONF_STATE_CLASS: Final = "state_class"
 CONF_SUGGESTED_DISPLAY_PRECISION: Final = "suggested_display_precision"
 CONF_UNIQUE_ID: Final = "unique_id"
-CONF_SOURCE: Final = "source"
-
-# Marks sensors that came from configuration.yaml, so they can be refreshed on
-# every restart without touching the ones added through the user interface.
-SOURCE_YAML: Final = "yaml"
 
 # Defaults.
 DEFAULT_PORT: Final = 3306

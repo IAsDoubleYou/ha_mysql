@@ -26,7 +26,7 @@ from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.template import Template
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType, StateType
+from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -48,7 +48,6 @@ from .const import (
     CONF_UNIQUE_ID,
     CONF_VALUE_COLUMN,
     CONF_VALUE_TEMPLATE,
-    DATA_YAML_IMPORTED,
     DOMAIN,
     VALUE_PREFIX,
 )
@@ -77,28 +76,6 @@ def _query_store(hass: HomeAssistant, entry: HAMySQLConfigEntry) -> Store:
     never reloads the whole connection and every sensor under it.
     """
     return Store(hass, STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}_queries")
-
-
-async def async_setup_platform(
-    hass: HomeAssistant,
-    config: ConfigType,
-    async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
-) -> None:
-    """Handle a sensor entry in configuration.yaml.
-
-    The entries are read and imported by async_setup, so nothing is created
-    here. Without the ha_mysql: section there is nothing to import.
-    """
-    if hass.data.get(DOMAIN, {}).get(DATA_YAML_IMPORTED):
-        return
-
-    _LOGGER.error(
-        "configuration.yaml has ha_mysql sensors but no ha_mysql: section, so "
-        "they are not imported. YAML configuration is deprecated: remove these "
-        "sensors from configuration.yaml and manage them through the user "
-        "interface instead"
-    )
 
 
 async def async_setup_entry(

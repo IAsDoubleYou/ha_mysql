@@ -62,9 +62,12 @@ FLUSH PRIVILEGES;
 
 ## Read-only by design
 
-This is a sensor integration, so it never writes: a query is checked, wherever it comes from — the user interface, `configuration.yaml` or [`ha_mysql.set_query`](#ha_mysqlset_query) — before it is stored or run. A query with more than one statement, or one that is not `SELECT`-style, is refused with the reason logged or shown on the form; nothing invalid is ever sent to the database.
+This is a sensor integration, so it never writes, and that is enforced twice:
 
-**What this does not protect against.** The check reads the leading keyword of the query; it is not a full security boundary. A `SELECT` can still write through `INTO OUTFILE` or a stored function with side effects, and MySQL 8 accepts a CTE in front of an `UPDATE`. The database user having only `SELECT` rights, as shown above, is what actually stops a write.
+* A query is checked, wherever it comes from, the user interface or [`ha_mysql.set_query`](#ha_mysqlset_query), before it is stored or run. A query with more than one statement, or one that is not `SELECT`-style, is refused with the reason logged or shown on the form; nothing invalid is ever sent to the database. A `SET` is refused as well, so a query cannot lift the second line.
+* Every connection the integration opens is set to read only (`SET SESSION TRANSACTION READ ONLY`) before its first query, also after the server dropped an idle connection and it was rebuilt. The database itself then refuses an `INSERT`, an `UPDATE`, a `DELETE` or a temporary table, with error 1792, whatever the query says.
+
+**What this does not protect against.** The first line reads the leading keyword of the query; it is not a full security boundary, and a read only session is a safeguard rather than a substitute for rights. A `SELECT` can still write a file through `INTO OUTFILE` when the user has the `FILE` privilege. The database user having only `SELECT` rights, as shown above, is what actually stops a write.
 
 ## Installation
 
@@ -92,49 +95,25 @@ Every connection becomes one device, with all its sensors underneath it. Sensors
 
 The connection itself, the host, port, username, password, database and TLS, is changed with **Reconfigure**, in the **⋮** menu of the connection. The new settings are tested before they are saved. The password field starts empty: leave it empty to keep the current password. When the database refuses the stored username or password, Home Assistant asks you to sign in again; the connection is then updated, not added a second time.
 
-## Configuration through `configuration.yaml`
-
-> **Deprecated.** The YAML configuration stops working in 2.0.0, and Home Assistant says so under **Settings → Repairs**. Nothing is lost when it goes: the connection and its sensors were imported and are stored in Home Assistant already. Remove both the `ha_mysql:` section and the sensors with `platform: ha_mysql` from `configuration.yaml`, restart, and manage them through **Configure** and **Reconfigure** from then on.
-
-Until then YAML keeps working, for the connection's *sensors* specifically: on every start, `configuration.yaml` stays the source of truth for the sensors defined there, and sensors you added through the user interface are left untouched. The `ha_mysql:` connection block itself (host, port, username, password, database) is only read the first time it creates the entry; after that, the entry's connection is yours to manage through **Reconfigure**, and `configuration.yaml` is not read again for it - so a password rotated through the interface is never silently reverted by a file you forgot to update.
-
-```yaml
-ha_mysql:
-  host: 192.168.1.10
-  port: 3306
-  username: homeassistant
-  password: !secret mysql_password
-  database: mydatabase
-
-sensor:
-  - platform: ha_mysql
-    name: Employees
-    query: SELECT * FROM emp
-
-  - platform: ha_mysql
-    name: Departments
-    query: SELECT * FROM dept
-    scan_interval: 300
-```
-
-A few things worth knowing:
-
-* Removing a sensor from `configuration.yaml` also removes it from Home Assistant on the next restart.
-* Sensors that came from YAML keep the entity ID and the history they had in earlier releases.
-* Editing a YAML sensor through the user interface works, but `configuration.yaml` wins again after a restart. Pick one place per sensor.
-
 ### Connection options
 
-| Option | Required | Default | Description |
+| Field | Required | Default | Description |
 |---|---|---|---|
-| `host` | yes | | Host name or IP address of the database server |
-| `port` | no | `3306` | Port the server listens on |
-| `username` | yes | | User the queries run as |
-| `password` | yes | | Password of that user |
-| `database` | yes | | Database name |
-| Encrypt the connection (TLS) | no | off | User interface only, see [Encrypting the connection](#encrypting-the-connection) |
+| Host | yes | | Host name or IP address of the database server |
+| Port | yes | `3306` | Port the server listens on |
+| Username | yes | | User the queries run as |
+| Password | yes | | Password of that user |
+| Database name | yes | | Database the connection opens |
+| Encrypt the connection (TLS) | no | off | See [Encrypting the connection](#encrypting-the-connection) |
 
-The first five are read from `configuration.yaml` as well. TLS is a user interface only option: a YAML-imported connection always starts unencrypted and can be turned on afterwards through **Reconfigure**.
+### Upgrading from 1.x
+
+Release 2.0.0 no longer reads `configuration.yaml`. The connection and the sensors that earlier releases imported from it are stored in Home Assistant and keep working, with the same entity IDs and the same history. Remove the `ha_mysql:` section and the sensors with `platform: ha_mysql` from `configuration.yaml`; Home Assistant reports them for as long as they are there.
+
+Two things to check:
+
+* The sensors are the ones that were imported the last time Home Assistant started with an earlier release. A change made in `configuration.yaml` after that is not in them: look at the sensors under **Configure**.
+* A YAML configuration that was never imported, because it never started with a release that did, is not picked up. Add the connection and its sensors through the user interface.
 
 ### Encrypting the connection
 
@@ -152,18 +131,20 @@ SHOW GLOBAL VARIABLES LIKE 'have_ssl';
 
 ### Sensor options
 
-| Option | Required | Default | Description |
+These are the fields of the sensor form under **Configure**. The name between brackets is how the field is called in the log messages and in this README.
+
+| Field | Required | Default | Description |
 |---|---|---|---|
-| `name` | yes | | Name of the sensor. Combined with the connection's device name for a new sensor's entity ID and friendly name |
-| `query` | yes | | SQL query to run |
-| `scan_interval` | no | `30` | Seconds between two runs of the query |
-| `value_column` | no | | Column of the selected row to use as the state, instead of the row count |
-| `value_template` | no | | Template that produces the state. Takes precedence over `value_column` |
-| `unit_of_measurement` | no | | Unit shown behind the value, for example `kWh` or `°C` |
-| `device_class` | no | | [Sensor device class](https://www.home-assistant.io/integrations/sensor/#device-class), for example `energy` or `temperature` |
-| `state_class` | no | | `measurement`, `total` or `total_increasing`. Needed for long term statistics |
-| `suggested_display_precision` | no | | Number of decimals shown in the interface |
-| `max_json_rows` | no | `0` | Maximum number of rows in `json_result`. `0` keeps all of them |
+| Name (`name`) | yes | | Name of the sensor. Combined with the connection's device name for a new sensor's entity ID and friendly name |
+| Query (`query`) | yes | | SQL query to run |
+| Update interval (seconds) (`scan_interval`) | no | `30` | Seconds between two runs of the query |
+| Value column (`value_column`) | no | | Column of the selected row to use as the state, instead of the row count |
+| Value template (`value_template`) | no | | Template that produces the state. Takes precedence over the value column |
+| Unit of measurement (`unit_of_measurement`) | no | | Unit shown behind the value, for example `kWh` or `°C` |
+| Device class (`device_class`) | no | | [Sensor device class](https://www.home-assistant.io/integrations/sensor/#device-class), for example `energy` or `temperature` |
+| State class (`state_class`) | no | | `measurement`, `total` or `total_increasing`. Needed for long term statistics |
+| Display precision (`suggested_display_precision`) | no | | Number of decimals shown in the interface |
+| Maximum rows in json_result (`max_json_rows`) | no | `0` | Maximum number of rows in `json_result`. `0` keeps all of them |
 
 Whenever `unit_of_measurement`, `state_class` or `suggested_display_precision` is set, the state has to be numeric. A value that cannot be read as a number becomes `unknown` and is reported once in the log.
 
@@ -177,16 +158,11 @@ Whenever `unit_of_measurement`, `state_class` or `suggested_display_precision` i
 | `rows` | All rows as a list of dictionaries |
 | `row_count` | The number of rows |
 
-```yaml
-value_template: "{{ row.salary | float * 1.21 }}"
-# row.salary "1000.50" -> state 1210.605
-
-value_template: "{{ rows | map(attribute='kwh') | map('float') | sum }}"
-# rows with kwh 1.2, 0.8 and 2.1 -> state 4.1
-
-value_template: "{{ 'busy' if row_count > 10 else 'quiet' }}"
-# row_count 2 -> state "quiet", row_count 15 -> state "busy"
-```
+| Value template | Result set | State |
+|---|---|---|
+| `{{ row.salary \| float * 1.21 }}` | `row.salary` is `1000.50` | `1210.605` |
+| `{{ rows \| map(attribute='kwh') \| map('float') \| sum }}` | rows with `kwh` 1.2, 0.8 and 2.1 | `4.1` |
+| `{{ 'busy' if row_count > 10 else 'quiet' }}` | 2 rows, or 15 rows | `quiet`, or `busy` |
 
 ### Attributes
 
@@ -224,47 +200,47 @@ Storing an image or another large binary value in a sensor is a bad idea regardl
 
 ## Examples
 
-The examples are written as YAML because that is short. Every option is also a field of the sensor form under **Configure**, which is the way to add them now that the YAML configuration is deprecated.
+Each example is a sensor added through **Configure → Add a sensor**. Fields that are not listed keep their default.
 
 ### Daily energy consumption
 
-```yaml
-sensor:
-  - platform: ha_mysql
-    name: Energy today
-    query: >
-      SELECT ROUND(SUM(kwh), 3) AS total
-      FROM energy_log
-      WHERE DATE(logged_at) = CURDATE()
-    scan_interval: 300
-    value_column: total
-    unit_of_measurement: kWh
-    device_class: energy
-    state_class: total_increasing
-    suggested_display_precision: 2
+```sql
+SELECT ROUND(SUM(kwh), 3) AS total
+FROM energy_log
+WHERE DATE(logged_at) = CURDATE()
 ```
 
-Because of `device_class: energy` and `state_class: total_increasing`, it can be added under **Settings → Dashboards → Energy** as a consumption source.
+| Field | Value |
+|---|---|
+| Name | `Energy today` |
+| Update interval (seconds) | `300` |
+| Value column | `total` |
+| Unit of measurement | `kWh` |
+| Device class | `energy` |
+| State class | `total_increasing` |
+| Display precision | `2` |
+
+Because of the device class `energy` and the state class `total_increasing`, it can be added under **Settings → Dashboards → Energy** as a consumption source.
 
 ### Temperature from a logging table
 
-```yaml
-sensor:
-  - platform: ha_mysql
-    name: Greenhouse temperature
-    query: >
-      SELECT temperature, measured_at
-      FROM measurements
-      WHERE sensor_id = 3
-      ORDER BY measured_at DESC
-      LIMIT 1
-    scan_interval: 60
-    value_column: temperature
-    unit_of_measurement: "°C"
-    device_class: temperature
-    state_class: measurement
-    suggested_display_precision: 1
+```sql
+SELECT temperature, measured_at
+FROM measurements
+WHERE sensor_id = 3
+ORDER BY measured_at DESC
+LIMIT 1
 ```
+
+| Field | Value |
+|---|---|
+| Name | `Greenhouse temperature` |
+| Update interval (seconds) | `60` |
+| Value column | `temperature` |
+| Unit of measurement | `°C` |
+| Device class | `temperature` |
+| State class | `measurement` |
+| Display precision | `1` |
 
 `valueof_measured_at` tells you how old the reading is.
 
@@ -272,26 +248,28 @@ sensor:
 
 The default behaviour, useful for queues, open orders or unread messages.
 
-```yaml
-sensor:
-  - platform: ha_mysql
-    name: Open orders
-    query: SELECT id, customer, total FROM orders WHERE status = 'open'
-    scan_interval: 120
+```sql
+SELECT id, customer, total FROM orders WHERE status = 'open'
 ```
+
+| Field | Value |
+|---|---|
+| Name | `Open orders` |
+| Update interval (seconds) | `120` |
 
 The state is the number of open orders, and `valueof_customer` shows the first one. Use [`ha_mysql.select_record`](#ha_mysqlselect_record) to walk through the others.
 
 ### A list without flooding the database
 
-```yaml
-sensor:
-  - platform: ha_mysql
-    name: Recent alarms
-    query: SELECT moment, message FROM alarms ORDER BY moment DESC
-    scan_interval: 600
-    max_json_rows: 20
+```sql
+SELECT moment, message FROM alarms ORDER BY moment DESC
 ```
+
+| Field | Value |
+|---|---|
+| Name | `Recent alarms` |
+| Update interval (seconds) | `600` |
+| Maximum rows in json_result | `20` |
 
 ### Building a template sensor on top of it
 
@@ -485,11 +463,8 @@ Each connection uses a pool of at most ten connections, shared by all sensors of
 
 One database can be configured per connection, but the integration can be added more than once, each with its own database. A query can also read from another database on the same server by qualifying the table name:
 
-```yaml
-sensor:
-  - platform: ha_mysql
-    name: Departments
-    query: SELECT * FROM personnel.dept
+```sql
+SELECT * FROM personnel.dept
 ```
 
 The user has to have `SELECT` rights on that database as well.

@@ -17,7 +17,7 @@ import yaml
 from custom_components.ha_mysql.const import SERVICE_SELECT_RECORD, SERVICE_SET_QUERY
 from custom_components.ha_mysql.coordinator import ConnectFailure
 from custom_components.ha_mysql.services import SELECT_RECORD_SCHEMA, SET_QUERY_SCHEMA
-from custom_components.ha_mysql.sql import ERROR_MESSAGES
+from custom_components.ha_mysql.sql import validate_read_only_query
 
 PACKAGE = Path(__file__).resolve().parent.parent / "custom_components" / "ha_mysql"
 STRINGS = json.loads((PACKAGE / "strings.json").read_text())
@@ -36,7 +36,9 @@ SCHEMAS = {
 # of its message instead of writing the key out, so the source cannot list them.
 CONNECT_FAILURES = set(get_args(ConnectFailure.__value__))
 # The same goes for the keys the read-only check returns.
-READ_ONLY_ERRORS = set(ERROR_MESSAGES)
+READ_ONLY_ERRORS = {
+    validate_read_only_query(query) for query in ("SELECT 1; SELECT 2", "DELETE FROM t")
+}
 
 
 def _paths(node: object, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
@@ -66,18 +68,19 @@ def test_dutch_translation_has_exactly_the_keys_of_the_english_one() -> None:
 
 def test_every_exception_key_in_the_code_exists_and_every_key_is_used() -> None:
     """Each translation_key is defined, and none is defined for nothing."""
-    used = (_translation_keys() - set(STRINGS["issues"])) | CONNECT_FAILURES
-    used |= READ_ONLY_ERRORS
+    used = _translation_keys() | CONNECT_FAILURES | READ_ONLY_ERRORS
 
     assert used == set(STRINGS["exceptions"])
 
 
-def test_every_issue_is_defined_and_used() -> None:
-    """The Repairs issues the code raises are the ones the strings describe."""
-    issues = set(re.findall(r'"([a-z_]+)",\s*is_fixable=', SOURCE["__init__.py"]))
+def test_no_repairs_issue_is_raised() -> None:
+    """The code raises no Repairs issue, so the strings describe none.
 
-    assert issues == set(STRINGS["issues"])
-    assert issues <= _translation_keys()
+    Release 1.7.0 raised one for the YAML configuration. The code only deletes
+    that issue now, and its text is gone with it.
+    """
+    assert "async_create_issue" not in "".join(SOURCE.values())
+    assert "issues" not in STRINGS
 
 
 def test_every_form_error_key_is_defined_and_used() -> None:

@@ -180,12 +180,6 @@
       "message": "values heeft een nieuwe query nodig in dezelfde aanroep; zonder die query is er niets om de waarden aan te koppelen."
     }
   },
-  "issues": {
-    "deprecated_yaml": {
-      "title": "De HA MySQL-configuratie in configuration.yaml is verouderd",
-      "description": "HA MySQL instellen in configuration.yaml is verouderd en werkt niet meer vanaf ha_mysql 2.0.0. De verbinding en de sensoren zijn al in Home Assistant opgeslagen, dus er gaat niets verloren als de YAML verdwijnt.\n\nVerwijder zowel de sectie `ha_mysql:` als de sensoren met `platform: ha_mysql` uit configuration.yaml, en herstart Home Assistant. Beheer daarna de sensoren via Configureren en de verbinding via Opnieuw configureren."
-    }
-  },
   "services": {
     "set_query": {
       "name": "Query instellen",

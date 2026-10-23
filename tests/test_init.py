@@ -5,13 +5,12 @@ from __future__ import annotations
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import SOURCE_IMPORT, SOURCE_REAUTH, ConfigEntryState
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 
 from .conftest import (
-    CONFIG,
     CONNECTION,
     ENTITY_ID,
     UNIQUE_ID,
@@ -20,7 +19,9 @@ from .conftest import (
     make_sensor,
     setup_entry,
 )
+from custom_components.ha_mysql import async_migrate_entry
 from custom_components.ha_mysql.const import (
+    CONFIG_ENTRY_VERSION,
     DOMAIN,
     SERVICE_SELECT_RECORD,
     SERVICE_SET_QUERY,
@@ -29,180 +30,6 @@ from custom_components.ha_mysql.coordinator import (
     MySQLConnectionError,
     TLSUnavailableError,
 )
-
-
-async def _import_yaml(hass: HomeAssistant, config: dict | None = None) -> None:
-    """Set up the integration from configuration.yaml."""
-    assert await async_setup_component(hass, DOMAIN, config or CONFIG)
-    await hass.async_block_till_done()
-
-
-async def test_yaml_creates_config_entry(hass: HomeAssistant, mock_execute) -> None:
-    """configuration.yaml is imported into a config entry."""
-    await _import_yaml(hass)
-
-    entries = hass.config_entries.async_entries(DOMAIN)
-    assert len(entries) == 1
-    entry = entries[0]
-    assert entry.unique_id == UNIQUE_ID
-    assert entry.state is ConfigEntryState.LOADED
-    # The port that was left out of the YAML falls back to the default.
-    assert entry.data["port"] == 3306
-
-    sensors = entry.options["sensors"]
-    assert len(sensors) == 1
-    assert sensors[0]["name"] == "Employees"
-    assert sensors[0]["query"] == "SELECT * FROM emp"
-    assert sensors[0]["source"] == "yaml"
-    # Existing installations keep their entity ID and history.
-    assert sensors[0]["unique_id"] == "ha_mysql_employees"
-
-
-async def test_yaml_creates_entities(hass: HomeAssistant, mock_execute) -> None:
-    """The imported sensors show up as entities."""
-    await _import_yaml(hass)
-
-    assert hass.states.get(ENTITY_ID).state == "2"
-
-
-async def test_yaml_options_are_read(hass: HomeAssistant, mock_execute) -> None:
-    """Optional YAML settings end up in the config entry."""
-    config = {
-        **CONFIG,
-        "sensor": [
-            {
-                "platform": "ha_mysql",
-                "name": "Salary",
-                "query": "SELECT * FROM emp",
-                "scan_interval": 300,
-                "value_column": "salary",
-                "unit_of_measurement": "EUR",
-                "state_class": "measurement",
-                "suggested_display_precision": 2,
-                "max_json_rows": 50,
-            }
-        ],
-    }
-    await _import_yaml(hass, config)
-
-    sensor = hass.config_entries.async_entries(DOMAIN)[0].options["sensors"][0]
-    assert sensor["scan_interval"] == 300
-    assert sensor["value_column"] == "salary"
-    assert sensor["unit_of_measurement"] == "EUR"
-    assert sensor["state_class"] == "measurement"
-    assert sensor["suggested_display_precision"] == 2
-    assert sensor["max_json_rows"] == 50
-
-
-async def test_yaml_skips_invalid_sensor(hass: HomeAssistant, mock_execute) -> None:
-    """A sensor without a query is skipped instead of breaking the setup."""
-    config = {
-        **CONFIG,
-        "sensor": [
-            {"platform": "ha_mysql", "name": "Broken"},
-            {"platform": "ha_mysql", "name": "Employees", "query": "SELECT 1"},
-        ],
-    }
-    await _import_yaml(hass, config)
-
-    sensors = hass.config_entries.async_entries(DOMAIN)[0].options["sensors"]
-    assert [sensor["name"] for sensor in sensors] == ["Employees"]
-
-
-async def test_yaml_skips_a_mutating_sensor(hass: HomeAssistant, mock_execute) -> None:
-    """A sensor with a write in its query is skipped, not polled forever."""
-    config = {
-        **CONFIG,
-        "sensor": [
-            {"platform": "ha_mysql", "name": "Broken", "query": "DELETE FROM emp"},
-            {"platform": "ha_mysql", "name": "Employees", "query": "SELECT 1"},
-        ],
-    }
-    await _import_yaml(hass, config)
-
-    sensors = hass.config_entries.async_entries(DOMAIN)[0].options["sensors"]
-    assert [sensor["name"] for sensor in sensors] == ["Employees"]
-
-
-async def test_yaml_ignores_other_platforms(hass: HomeAssistant, mock_execute) -> None:
-    """Sensors of other integrations are left alone."""
-    config = {
-        **CONFIG,
-        "sensor": [
-            {"platform": "template", "name": "Something else"},
-            {"platform": "ha_mysql", "name": "Employees", "query": "SELECT 1"},
-        ],
-    }
-    await _import_yaml(hass, config)
-
-    sensors = hass.config_entries.async_entries(DOMAIN)[0].options["sensors"]
-    assert [sensor["name"] for sensor in sensors] == ["Employees"]
-
-
-async def _run_import(hass: HomeAssistant, sensors: list[dict]) -> None:
-    """Run the import step the way a restart with YAML would."""
-    await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_IMPORT},
-        data={"connection": CONNECTION, "sensors": sensors},
-    )
-    await hass.async_block_till_done()
-
-
-async def test_yaml_refreshes_existing_entry(hass: HomeAssistant, mock_execute) -> None:
-    """A changed query in configuration.yaml reaches the existing entry.
-
-    The entry is loaded again by the import itself, so the sensor runs the
-    new query right away instead of after the next restart.
-    """
-    entry = make_entry([make_sensor(source="yaml")])
-    await setup_entry(hass, entry)
-
-    await _run_import(
-        hass,
-        [make_sensor(query="SELECT * FROM emp WHERE active = 1", source="yaml")],
-    )
-
-    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
-    sensors = entry.options["sensors"]
-    assert len(sensors) == 1
-    assert sensors[0]["query"] == "SELECT * FROM emp WHERE active = 1"
-    assert entry.state is ConfigEntryState.LOADED
-    assert (
-        hass.states.get(ENTITY_ID).attributes["executed_sql_query"]
-        == "SELECT * FROM emp WHERE active = 1"
-    )
-
-
-async def test_yaml_import_without_changes_does_not_reload(
-    hass: HomeAssistant, mock_execute
-) -> None:
-    """An unchanged sensor list leaves the loaded entry alone."""
-    entry = make_entry([make_sensor(source="yaml")])
-    await setup_entry(hass, entry)
-    mock_execute.reset_mock()
-
-    await _run_import(hass, [make_sensor(source="yaml")])
-
-    assert entry.state is ConfigEntryState.LOADED
-    assert mock_execute.call_count == 0
-
-
-async def test_yaml_raises_a_repair_issue(hass: HomeAssistant, mock_execute) -> None:
-    """configuration.yaml still works, and Repairs says it is deprecated."""
-    await _import_yaml(hass)
-
-    issue = ir.async_get(hass).async_get_issue(DOMAIN, "deprecated_yaml")
-    assert issue is not None
-    assert issue.severity is ir.IssueSeverity.WARNING
-    assert issue.translation_key == "deprecated_yaml"
-
-
-async def test_no_repair_issue_without_yaml(hass: HomeAssistant, mock_execute) -> None:
-    """A connection set up through the user interface raises no issue."""
-    await setup_entry(hass, make_entry())
-
-    assert ir.async_get(hass).async_get_issue(DOMAIN, "deprecated_yaml") is None
 
 
 async def test_actions_are_registered_without_a_connection(
@@ -216,59 +43,135 @@ async def test_actions_are_registered_without_a_connection(
     assert hass.services.has_service(DOMAIN, SERVICE_SELECT_RECORD)
 
 
-async def test_yaml_import_does_not_revert_a_connection_fixed_through_the_ui(
+async def test_a_yaml_section_creates_nothing(
     hass: HomeAssistant, mock_execute
 ) -> None:
-    """A stale configuration.yaml never reverts a connection fixed via Configure.
+    """configuration.yaml is no longer read: Home Assistant reports the section.
 
-    Regression test: an entry's connection used to be re-imported from YAML
-    on every restart, so correcting a wrong password through Change the
-    database connection was silently undone the next time Home Assistant
-    started while the old value was still sitting in configuration.yaml.
+    Release 1.7.0 still imported it and raised a Repairs issue. A connection
+    that was imported then lives on in its config entry, and a section that is
+    still in the file does not create another one.
     """
+    config = {
+        DOMAIN: {
+            "host": "db.local",
+            "username": "user",
+            "password": "secret",
+            "database": "testdb",
+        },
+        "sensor": [{"platform": DOMAIN, "name": "Employees", "query": "SELECT 1"}],
+    }
+
+    await async_setup_component(hass, DOMAIN, config)
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.async_entries(DOMAIN) == []
+    assert hass.states.async_entity_ids("sensor") == []
+
+
+async def test_the_deprecation_issue_of_release_1_7_0_is_removed(
+    hass: HomeAssistant,
+) -> None:
+    """Repairs stops showing the issue that 1.7.0 raised for the YAML section."""
+    registry = ir.async_get(hass)
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        "deprecated_yaml",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="deprecated_yaml",
+    )
+    assert registry.async_get_issue(DOMAIN, "deprecated_yaml") is not None
+
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    assert registry.async_get_issue(DOMAIN, "deprecated_yaml") is None
+
+
+async def test_migration_drops_the_yaml_source_marker(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """Sensors imported from YAML by an earlier release lose their marker.
+
+    Everything else about them stays, the unique ID above all: it is what
+    keeps the entity ID and the history.
+    """
+    imported = make_sensor(source="yaml")
+    added_in_the_ui = make_sensor(name="From UI", unique_id="abc123")
     entry = MockConfigEntry(
-        domain="ha_mysql",
+        domain=DOMAIN,
         title="testdb @ db.local",
-        data={**CONNECTION, "password": "corrected-through-the-ui"},
+        data=CONNECTION,
+        options={"sensors": [imported, added_in_the_ui], "other": "kept"},
+        unique_id=UNIQUE_ID,
+        version=1,
+    )
+
+    await setup_entry(hass, entry)
+
+    assert entry.version == CONFIG_ENTRY_VERSION
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.options["other"] == "kept"
+    assert entry.options["sensors"] == [
+        make_sensor(),
+        make_sensor(name="From UI", unique_id="abc123"),
+    ]
+    assert hass.states.get(ENTITY_ID) is not None
+
+
+async def test_migration_handles_an_entry_without_sensors(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """An entry whose sensors were all removed migrates as well."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="testdb @ db.local",
+        data=CONNECTION,
+        options={},
+        unique_id=UNIQUE_ID,
+        version=1,
+    )
+
+    await setup_entry(hass, entry)
+
+    assert entry.version == CONFIG_ENTRY_VERSION
+    assert entry.options == {"sensors": []}
+    assert entry.state is ConfigEntryState.LOADED
+
+
+async def test_an_entry_from_a_newer_release_is_not_loaded(
+    hass: HomeAssistant, mock_execute
+) -> None:
+    """A downgrade is refused instead of reading data it does not know."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="testdb @ db.local",
+        data=CONNECTION,
         options={"sensors": [make_sensor()]},
         unique_id=UNIQUE_ID,
+        version=CONFIG_ENTRY_VERSION + 1,
     )
+
     await setup_entry(hass, entry)
 
-    # CONFIG's password ("secret") is now stale compared to the entry's.
-    await _import_yaml(hass)
-
-    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
-    assert entry.data["password"] == "corrected-through-the-ui"
+    assert entry.state is ConfigEntryState.MIGRATION_ERROR
+    assert entry.version == CONFIG_ENTRY_VERSION + 1
 
 
-async def test_yaml_import_keeps_ui_sensors(hass: HomeAssistant, mock_execute) -> None:
-    """Sensors added through the interface survive a YAML import."""
-    # No source marker, so this one was added through the user interface.
-    entry = make_entry([make_sensor(name="From UI", unique_id="abc123")])
-    await setup_entry(hass, entry)
-
-    await _run_import(hass, [make_sensor(source="yaml")])
-
-    names = {sensor["name"] for sensor in entry.options["sensors"]}
-    assert names == {"Employees", "From UI"}
-
-
-async def test_yaml_import_drops_removed_yaml_sensors(
-    hass: HomeAssistant, mock_execute
-) -> None:
-    """A sensor taken out of configuration.yaml disappears on the next start."""
-    entry = make_entry(
-        [
-            make_sensor(source="yaml"),
-            make_sensor(name="Gone", unique_id="x", source="yaml"),
-        ]
+async def test_the_migration_itself_refuses_a_newer_entry(hass: HomeAssistant) -> None:
+    """Whatever Home Assistant does first, the migration never touches the data."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=CONNECTION,
+        options={"sensors": [make_sensor(source="yaml")]},
+        version=CONFIG_ENTRY_VERSION + 1,
     )
-    await setup_entry(hass, entry)
+    entry.add_to_hass(hass)
 
-    await _run_import(hass, [make_sensor(source="yaml")])
-
-    assert [sensor["name"] for sensor in entry.options["sensors"]] == ["Employees"]
+    assert await async_migrate_entry(hass, entry) is False
+    assert entry.options["sensors"] == [make_sensor(source="yaml")]
 
 
 @pytest.mark.parametrize(
@@ -364,11 +267,15 @@ async def test_unload_entry(hass: HomeAssistant, mock_execute) -> None:
     assert state.attributes["restored"] is True
 
 
-async def test_sensor_platform_without_component_config(
+async def test_a_yaml_sensor_platform_creates_nothing(
     hass: HomeAssistant, mock_execute
 ) -> None:
-    """A sensor platform without an ha_mysql: section is reported, not crashed on."""
-    assert await async_setup_component(hass, "sensor", {"sensor": CONFIG["sensor"]})
+    """A sensor with platform: ha_mysql is reported by Home Assistant, not set up."""
+    config = {
+        "sensor": [{"platform": DOMAIN, "name": "Employees", "query": "SELECT 1"}]
+    }
+
+    assert await async_setup_component(hass, "sensor", config)
     await hass.async_block_till_done()
 
     assert hass.states.get(ENTITY_ID) is None

@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from custom_components.ha_mysql.sql import (
-    ERROR_MESSAGES,
     first_keyword,
     is_read_only,
     split_statements,
@@ -235,11 +234,3 @@ def test_a_query_cannot_change_the_transaction_mode(query: str, expected: str) -
     put behind a SELECT is refused as a second statement.
     """
     assert validate_read_only_query(query) == expected
-
-
-def test_error_messages_cover_every_error_key() -> None:
-    """Every error validate_read_only_query can return has readable text."""
-    for query in ("DELETE FROM emp", "SELECT 1; DROP TABLE emp"):
-        error = validate_read_only_query(query)
-        assert error is not None
-        assert ERROR_MESSAGES[error]

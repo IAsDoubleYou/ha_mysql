@@ -13,7 +13,6 @@ import voluptuous as vol
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import (
     ConfigEntry,
-    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlowWithReload,
@@ -40,7 +39,6 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
-    CONF_CONNECTION,
     CONF_MAX_JSON_ROWS,
     CONF_MYSQL_DATABASE,
     CONF_MYSQL_HOST,
@@ -49,19 +47,18 @@ from .const import (
     CONF_MYSQL_USERNAME,
     CONF_QUERY,
     CONF_SENSORS,
-    CONF_SOURCE,
     CONF_STATE_CLASS,
     CONF_SUGGESTED_DISPLAY_PRECISION,
     CONF_UNIQUE_ID,
     CONF_USE_TLS,
     CONF_VALUE_COLUMN,
     CONF_VALUE_TEMPLATE,
+    CONFIG_ENTRY_VERSION,
     DEFAULT_MAX_JSON_ROWS,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL_SECONDS,
     DEFAULT_USE_TLS,
     DOMAIN,
-    SOURCE_YAML,
 )
 from .coordinator import (
     MySQLConnectionError,
@@ -310,7 +307,7 @@ async def _async_validate_connection(
 class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the setup of a MySQL connection."""
 
-    VERSION = 1
+    VERSION = CONFIG_ENTRY_VERSION
 
     @staticmethod
     @callback
@@ -430,63 +427,6 @@ class HAMySQLConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
             description_placeholders={"connection": entry.title, "error": detail},
-        )
-
-    async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
-        """Import the settings from configuration.yaml.
-
-        This runs on every restart, so the sensor list keeps following the
-        YAML file (sensors added through the user interface are left alone).
-        The connection itself is only taken from YAML the first time this
-        entry is created: on every later restart the existing entry's
-        connection is left exactly as configured, so a correction made
-        through Reconfigure or the sign-in flow is never silently reverted by
-        a configuration.yaml the user forgot to update or remove.
-        """
-        connection = import_data[CONF_CONNECTION]
-        yaml_sensors = import_data[CONF_SENSORS]
-
-        await self.async_set_unique_id(
-            _connection_id(connection), raise_on_progress=False
-        )
-
-        for entry in self._async_current_entries():
-            if entry.unique_id != self.unique_id:
-                continue
-            kept = [
-                sensor
-                for sensor in entry.options.get(CONF_SENSORS, [])
-                if sensor.get(CONF_SOURCE) != SOURCE_YAML
-            ]
-            changed = self.hass.config_entries.async_update_entry(
-                entry,
-                options={CONF_SENSORS: [*yaml_sensors, *kept]},
-            )
-            # There is no update listener, so an entry that is loaded, or is
-            # being loaded right now, only picks up the new sensor list when it
-            # is loaded again. One that is not loaded yet reads it when it is.
-            if changed and entry.state in (
-                ConfigEntryState.LOADED,
-                ConfigEntryState.SETUP_IN_PROGRESS,
-            ):
-                self.hass.config_entries.async_schedule_reload(entry.entry_id)
-            _LOGGER.warning(
-                "ha_mysql: the connection settings in configuration.yaml for "
-                "%s are only used the first time this integration starts. "
-                "This entry already exists, so its connection was left as "
-                "configured through the user interface; only its sensor list "
-                "still follows configuration.yaml. The YAML configuration is "
-                "deprecated and stops working in ha_mysql 2.0.0: remove the "
-                "ha_mysql: section and the ha_mysql sensors from "
-                "configuration.yaml. The connection and its sensors stay.",
-                self.unique_id,
-            )
-            return self.async_abort(reason="already_configured")
-
-        return self.async_create_entry(
-            title=_entry_title(connection),
-            data=connection,
-            options={CONF_SENSORS: yaml_sensors},
         )
 
 
@@ -669,8 +609,6 @@ class HAMySQLOptionsFlow(OptionsFlowWithReload):
                     # The unique ID stays untouched so the entity keeps its
                     # history.
                     cleaned[CONF_UNIQUE_ID] = sensors[index][CONF_UNIQUE_ID]
-                    if (source := sensors[index].get(CONF_SOURCE)) is not None:
-                        cleaned[CONF_SOURCE] = source
                     sensors[index] = cleaned
                     return self._save(sensors)
 

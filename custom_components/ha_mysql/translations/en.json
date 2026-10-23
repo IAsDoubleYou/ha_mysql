@@ -180,12 +180,6 @@
       "message": "values needs a new query in the same call; without one there is no query to bind the values to."
     }
   },
-  "issues": {
-    "deprecated_yaml": {
-      "title": "The HA MySQL configuration in configuration.yaml is deprecated",
-      "description": "Configuring HA MySQL in configuration.yaml is deprecated and stops working in ha_mysql 2.0.0. The connection and its sensors are already stored in Home Assistant, so nothing is lost when the YAML goes.\n\nRemove both the `ha_mysql:` section and the sensors with `platform: ha_mysql` from configuration.yaml, and restart Home Assistant. From then on, manage the sensors through Configure and the connection through Reconfigure."
-    }
-  },
   "services": {
     "set_query": {
       "name": "Set query",
