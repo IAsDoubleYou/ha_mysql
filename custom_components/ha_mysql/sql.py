@@ -18,8 +18,10 @@ from typing import Final
 # Deliberately left out, because they do change something despite looking
 # informational: ANALYZE (MariaDB runs "ANALYZE <statement>" for real, and
 # ANALYZE TABLE rewrites index statistics), CHECK and REPAIR and OPTIMIZE
-# (they can rewrite a table), FLUSH, SET and USE (server or session state,
-# and USE would leave a pooled connection pointing at another database), DO
+# (they can rewrite a table), FLUSH, SET and USE (server or session state;
+# SET TRANSACTION READ WRITE would lift the read only session every connection
+# is opened with, and USE would leave a pooled connection pointing at another
+# database), DO
 # and CALL (they evaluate code that can write), HANDLER, LOCK and UNLOCK, the
 # transaction statements, and PREPARE/EXECUTE/DEALLOCATE, which can carry any
 # statement at all.

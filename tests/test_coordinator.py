@@ -25,6 +25,7 @@ from custom_components.ha_mysql.const import (
 )
 from custom_components.ha_mysql.coordinator import (
     _CONNECTIVITY_ERRNOS,
+    READ_ONLY_COMMAND,
     MySQLConnectionError,
     MySQLConnectionManager,
     MySQLQueryError,
@@ -182,6 +183,39 @@ async def test_pool_is_created_with_the_configured_settings() -> None:
     assert kwargs["maxsize"] == POOL_MAX_SIZE
     assert kwargs["pool_recycle"] == POOL_RECYCLE_SECONDS
     assert "ssl" not in kwargs
+
+
+def test_the_session_is_set_to_read_only() -> None:
+    """Every connection is made read only, whatever builds it.
+
+    The driver runs init_command after each login, also the one it makes when
+    the server dropped an idle connection, so the pool never hands out a
+    session that can write. Measured against MariaDB 10.11: with it, an
+    INSERT, an UPDATE, a DELETE and a temporary table all fail with error
+    1792; the SET that would lift it is refused by the query check.
+    """
+    assert READ_ONLY_COMMAND == "SET SESSION TRANSACTION READ ONLY"
+    assert _manager()._connect_kwargs["init_command"] == READ_ONLY_COMMAND
+    assert _manager(use_tls=True)._connect_kwargs["init_command"] == READ_ONLY_COMMAND
+
+
+async def test_the_pool_and_the_test_connection_both_ask_for_read_only() -> None:
+    """The pool and the one-off test connection share the read only login."""
+    manager = _manager()
+    create_pool = AsyncMock(return_value=FakePool(FakeConnection(_cursor(rows=[]))))
+    connection = FakeConnection(_cursor(rows=[]))
+
+    with (
+        patch(CREATE_POOL, create_pool),
+        patch(CONNECT, AsyncMock(return_value=connection)) as connect,
+    ):
+        await manager.execute("SELECT 1")
+        await manager.test_connection()
+
+    assert create_pool.call_args.kwargs["init_command"] == READ_ONLY_COMMAND
+    assert connect.call_args.kwargs["init_command"] == READ_ONLY_COMMAND
+
+    await manager.close()
 
 
 @pytest.mark.parametrize(

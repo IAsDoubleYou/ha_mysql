@@ -75,6 +75,11 @@ ERRNO_DATABASE_ACCESS_DENIED: Final = 1044
 ERRNO_ACCESS_DENIED: Final = 1045
 ERRNO_UNKNOWN_DATABASE: Final = 1049
 
+# Run by the driver right after every login. Both MySQL and MariaDB refuse a
+# write, a temporary table included, with error 1792 in a read only
+# transaction, and with autocommit on every statement is one.
+READ_ONLY_COMMAND: Final = "SET SESSION TRANSACTION READ ONLY"
+
 type ConnectFailure = Literal[
     "invalid_auth", "unknown_database", "cannot_connect", "connection_refused"
 ]
@@ -270,6 +275,15 @@ class MySQLConnectionManager:
             # Without autocommit a pooled connection keeps an open transaction,
             # which makes InnoDB return the same snapshot on every poll.
             "autocommit": True,
+            # This integration only reads, so every session it opens is set to
+            # read only before the first query. The driver runs this on every
+            # login, including the one ping(reconnect=True) makes after the
+            # server dropped an idle connection, and the test connection
+            # shares these settings. It is a second line behind the check on
+            # the query text, and no replacement for the privileges of the
+            # database user: a statement that got past that check, such as a
+            # SET, could lift it again.
+            "init_command": READ_ONLY_COMMAND,
         }
         # Left out entirely when TLS is off, which is what keeps aiomysql from
         # offering it: it only runs the handshake when a context is present.
