@@ -17,6 +17,3 @@ jobs:
         uses: "hacs/action@main"
         with:
           category: "integration"
-          # This integration is distributed as a custom repository, so it is
-          # not part of the Home Assistant brands repository.
-          ignore: "brands"
