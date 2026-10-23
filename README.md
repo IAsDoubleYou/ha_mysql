@@ -382,7 +382,7 @@ data:
     - 1
 ```
 
-Every value is rendered through the Home Assistant template engine with native typing, so a template that produces a number or a boolean is bound as such instead of as text; a plain value without `{{ ... }}` is passed through untouched. A `%s` always stands for exactly one value, never a list — `WHERE id IN (%s)` with a list of ids does not work; write one placeholder per value instead. The number of placeholders and the number of values must match, or MySQL rejects the query.
+In an automation or script, Home Assistant renders a template in a value before the action runs, so a template that produces a number or a boolean is bound as such. The integration does not render values itself: a value is bound exactly as it arrives, so a call made through the REST API with `{{ ... }}` in a value binds that text. A `%s` always stands for exactly one value, never a list — `WHERE id IN (%s)` with a list of ids does not work; write one placeholder per value instead. The number of placeholders and the number of values must match, or MySQL rejects the query.
 
 As soon as `values` is used, the `%` character becomes special in the query text, the same way it would in Python string formatting. A literal percent sign then has to be doubled:
 

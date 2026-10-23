@@ -178,9 +178,6 @@
     },
     "values_without_query": {
       "message": "values heeft een nieuwe query nodig in dezelfde aanroep; zonder die query is er niets om de waarden aan te koppelen."
-    },
-    "invalid_template": {
-      "message": "Ongeldige template in values: {error}"
     }
   },
   "issues": {

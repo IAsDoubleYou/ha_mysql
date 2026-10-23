@@ -517,10 +517,16 @@ async def test_set_query_values_stay_out_of_the_statement(
     assert mock_execute.call_args[0][2] == ("1; DROP TABLE emp",)
 
 
-async def test_set_query_renders_templated_values(
+async def test_set_query_binds_a_value_as_given(
     hass: HomeAssistant, mock_execute
 ) -> None:
-    """A templated value is bound with its native type, not as text."""
+    """A value is data: nothing in it is rendered a second time.
+
+    Home Assistant renders the templates of an automation or a script before
+    the action runs. A value that still reads like a template when it gets
+    here, as it can through the REST API, is bound to the placeholder as the
+    literal text it is.
+    """
     await setup_entry(hass, make_entry())
     mock_execute.reset_mock()
 
@@ -529,36 +535,13 @@ async def test_set_query_renders_templated_values(
         SERVICE_SET_QUERY,
         {
             "entity_id": ENTITY_ID,
-            "query": "SELECT * FROM emp WHERE id = %s",
-            "values": ["{{ 1 + 1 }}"],
+            "query": "SELECT * FROM emp WHERE a = %s AND b = %s AND c = %s",
+            "values": ["{{ 1 + 1 }}", 7, None],
         },
         blocking=True,
     )
 
-    assert mock_execute.call_args[0][2] == (2,)
-
-
-async def test_set_query_rejects_a_broken_value_template(
-    hass: HomeAssistant, mock_execute
-) -> None:
-    """A value that fails to render is reported instead of sent to the driver."""
-    await setup_entry(hass, make_entry())
-    mock_execute.reset_mock()
-
-    with pytest.raises(ServiceValidationError) as caught:
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_QUERY,
-            {
-                "entity_id": ENTITY_ID,
-                "query": "SELECT * FROM emp WHERE id = %s",
-                "values": ["{{ 1 / 0 }}"],
-            },
-            blocking=True,
-        )
-
-    assert caught.value.translation_key == "invalid_template"
-    assert mock_execute.call_count == 0
+    assert mock_execute.call_args[0][2] == ("{{ 1 + 1 }}", 7, None)
 
 
 async def test_set_query_rejects_a_write(hass: HomeAssistant, mock_execute) -> None:

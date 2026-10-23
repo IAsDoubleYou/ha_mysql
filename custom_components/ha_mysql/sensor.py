@@ -53,7 +53,7 @@ from .const import (
     VALUE_PREFIX,
 )
 from .coordinator import MySQLQueryCoordinator, QueryResult
-from .helpers import rename_keys, render_values
+from .helpers import rename_keys
 from .sql import validate_read_only_query
 
 if TYPE_CHECKING:
@@ -404,7 +404,10 @@ class HAMySQLSensor(CoordinatorEntity[MySQLQueryCoordinator], SensorEntity):
                     translation_domain=DOMAIN, translation_key=error
                 )
             self.coordinator.query = query
-            self.coordinator.query_values = render_values(self.hass, values)
+            # The values are bound exactly as given. Home Assistant has already
+            # rendered the templates of an automation or a script before the
+            # call arrives, and a value that still reads "{{ ... }}" is data.
+            self.coordinator.query_values = tuple(values) if values else None
             if persist:
                 self._persisted_queries[self._attr_unique_id] = {
                     CONF_QUERY: self.coordinator.query,

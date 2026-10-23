@@ -22,8 +22,6 @@ SET_QUERY_SCHEMA = {
     vol.Optional(CONF_QUERY): cv.string,
     # Values bound to the %s placeholders of query. Only scalars are
     # accepted: those are the types MySQL can bind to a single placeholder.
-    # Strings are allowed to still be templates here, because a call made
-    # straight through the API arrives unrendered.
     vol.Optional(ATTR_VALUES): vol.All(
         cv.ensure_list, [vol.Any(None, bool, int, float, str)]
     ),

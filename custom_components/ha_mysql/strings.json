@@ -178,9 +178,6 @@
     },
     "values_without_query": {
       "message": "values needs a new query in the same call; without one there is no query to bind the values to."
-    },
-    "invalid_template": {
-      "message": "Invalid template in values: {error}"
     }
   },
   "issues": {
