@@ -6,6 +6,7 @@
 [![GitHub All Releases][downloads_total_shield]][releases]
 [![Tests][tests_shield]][tests]
 [![Community Forum][community_forum_shield]][community_forum]
+[![GitHub Stars](https://img.shields.io/github/stars/IAsDoubleYou/ha_mysql?style=social)](https://github.com/IAsDoubleYou/ha_mysql/stargazers)
 
 > **Questions, ideas or want to show what you built?** Join the conversation in [GitHub Discussions](https://github.com/IAsDoubleYou/ha_mysql/discussions).
 
