@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-10-24
+
+The integration moves to the validation library Home Assistant itself switched to, and the code is now fully type checked. Nothing changes for a connection or a sensor that is already set up.
+
+### Changed
+
+- **Home Assistant 2026.9.0 or newer is now required**, declared in `hacs.json` (previously 2026.3.0). Home Assistant replaced voluptuous with probatio in that release, and the forms and actions of this integration now use probatio directly. HACS keeps a Home Assistant older than 2026.9.0 on version 2.0.0.
+- The whole integration passes `mypy --strict`, and ships a `py.typed` marker. This is checked in CI from now on.
+
 ## [2.0.0] - 2026-10-23
 
 This release is about trust: every connection is opened read only, the YAML configuration is gone, and a value you pass to `set_query` is exactly what reaches the database. It is a major release because the last two change behaviour. A connection and its sensors set up through the user interface, or imported from YAML by an earlier release, keep working.
@@ -274,6 +283,7 @@ keep the entity IDs and the history they already had.
 See the [releases page](https://github.com/IAsDoubleYou/ha_mysql/releases) for
 the notes of 1.0.3 and older.
 
+[2.1.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.1.0
 [2.0.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.0.0
 [1.7.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.7.0
 [1.5.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v1.5.0
