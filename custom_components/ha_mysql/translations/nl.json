@@ -16,7 +16,7 @@
           "host": "Hostnaam of IP-adres van de databaseserver.",
           "port": "Poort waarop de server luistert. Standaard is dat 3306.",
           "username": "Gebruiker waaronder de query's draaien. Leesrechten volstaan.",
-          "database": "Database voor query's die zelf geen database noemen.",
+          "database": "Naam van de database",
           "use_tls": "Versleutelt het verkeer naar de database. De server moet TLS ondersteunen; de verbinding mislukt als dat niet zo is. Het certificaat van de server wordt niet gecontroleerd, dus dit beschermt tegen meelezen op het netwerk, niet tegen een server die zich voordoet als de jouwe. Standaard uit, zodat bestaande installaties blijven werken."
         }
       },
@@ -36,7 +36,7 @@
           "port": "Poort waarop de server luistert. Standaard is dat 3306.",
           "username": "Gebruiker waaronder de query's draaien. Leesrechten volstaan.",
           "password": "Laat leeg om het huidige wachtwoord te houden.",
-          "database": "Database voor query's die zelf geen database noemen.",
+          "database": "Naam van de database",
           "use_tls": "Versleutelt het verkeer naar de database. De server moet TLS ondersteunen; de verbinding mislukt als dat niet zo is. Het certificaat van de server wordt niet gecontroleerd, dus dit beschermt tegen meelezen op het netwerk, niet tegen een server die zich voordoet als de jouwe."
         }
       },

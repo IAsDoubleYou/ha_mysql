@@ -16,7 +16,7 @@
           "host": "Host name or IP address of the database server.",
           "port": "Port the server listens on. The default is 3306.",
           "username": "User the queries run as. Read only rights are enough.",
-          "database": "Database used for queries that do not name one themselves.",
+          "database": "Database name",
           "use_tls": "Encrypts the traffic to the database. The server must have TLS configured; the connection fails if it does not. The server certificate is not verified, so this protects against reading along on the network, not against a server impersonating yours. Off by default so existing setups keep working."
         }
       },
@@ -36,7 +36,7 @@
           "port": "Port the server listens on. The default is 3306.",
           "username": "User the queries run as. Read only rights are enough.",
           "password": "Leave empty to keep the current password.",
-          "database": "Database used for queries that do not name one themselves.",
+          "database": "Database name",
           "use_tls": "Encrypts the traffic to the database. The server must have TLS configured; the connection fails if it does not. The server certificate is not verified, so this protects against reading along on the network, not against a server impersonating yours."
         }
       },

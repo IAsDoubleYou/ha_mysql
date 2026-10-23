@@ -131,7 +131,7 @@ A few things worth knowing:
 | `port` | no | `3306` | Port the server listens on |
 | `username` | yes | | User the queries run as |
 | `password` | yes | | Password of that user |
-| `database` | yes | | Default database for queries that do not name one themselves |
+| `database` | yes | | Database name |
 | Encrypt the connection (TLS) | no | off | User interface only, see [Encrypting the connection](#encrypting-the-connection) |
 
 The first five are read from `configuration.yaml` as well. TLS is a user interface only option: a YAML-imported connection always starts unencrypted and can be turned on afterwards through **Reconfigure**.
