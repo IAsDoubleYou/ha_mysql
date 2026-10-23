@@ -33,6 +33,12 @@ Queries can be replaced at runtime with the [`ha_mysql.set_query`](#ha_mysqlset_
 - **Optional TLS**: encrypt the connection, with a refusal instead of a silent fallback to plain text.
 - **JSON-safe results**: MySQL types such as `DECIMAL`, `DATE` and `TIME` are converted automatically.
 
+## Why HA MySQL?
+
+- **Made for MySQL and MariaDB**: an asynchronous driver, one shared pool per connection and a timeout on every query, so a slow database never holds up Home Assistant.
+- **Safe by design**: every session is read only, so the database itself refuses a write.
+- **Flexible at runtime**: change a sensor's query from an automation, and use the whole result set, not just one value.
+
 ## What is the state of the sensor?
 
 **By default the state is the number of rows the query returned**, not a value from the result set. This surprises most people at first, so it is worth repeating.
@@ -488,22 +494,6 @@ SELECT * FROM personnel.dept
 ```
 
 The user has to have `SELECT` rights on that database as well.
-
-## HA MySQL or the SQL integration of Home Assistant?
-
-Home Assistant's own [SQL integration](https://www.home-assistant.io/integrations/sql/) reads from any database SQLAlchemy supports, and is the natural choice for a single value from SQLite or PostgreSQL. HA MySQL is built for MySQL and MariaDB only, and adds:
-
-| | **HA MySQL** | **SQL integration** |
-|---|---|---|
-| Driver | aiomysql, asynchronous on the event loop | SQLAlchemy, synchronous in executor threads |
-| Read only | Checked on the query text, and every session is read only, so the database refuses a write | Checked on the query text |
-| A query that stops answering | Times out after 30 seconds | No timeout of its own |
-| Change a query at runtime | `ha_mysql.set_query`, with `%s` values, optionally kept across restarts | No |
-| Result | Row count as state, one selected row as attributes, the whole result set as JSON | The last row returned |
-| Connection | Separate fields, sign in again when the password is refused, TLS that refuses to fall back to plain text | A database URL with the password in it |
-| Requirements | aiomysql | SQLAlchemy and sqlparse, plus a MySQL driver for the URL |
-
-Both share a connection pool between the sensors of one database.
 
 ## HA MySQL or MySQL Query?
 
