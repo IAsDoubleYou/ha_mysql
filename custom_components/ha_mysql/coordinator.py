@@ -312,6 +312,18 @@ class MySQLConnectionManager:
         """Return a printable description of the configured database."""
         return self._target
 
+    @property
+    def pool_status(self) -> dict[str, int] | None:
+        """Return the size of the pool, or None while it has not been opened."""
+        if (pool := self._pool) is None:
+            return None
+        return {
+            "minimum": int(pool.minsize),
+            "maximum": int(pool.maxsize),
+            "open": int(pool.size),
+            "idle": int(pool.freesize),
+        }
+
     async def _get_pool(self) -> aiomysql.Pool:
         """Return the shared pool, creating it on first use."""
         async with self._pool_lock:
