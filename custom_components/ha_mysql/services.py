@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.core import HomeAssistant, callback
@@ -19,16 +19,18 @@ from .const import (
 )
 
 SET_QUERY_SCHEMA = {
-    vol.Optional(CONF_QUERY): cv.string,
+    probatio.Optional(CONF_QUERY): cv.string,
     # Values bound to the %s placeholders of query. Only scalars are
     # accepted: those are the types MySQL can bind to a single placeholder.
-    vol.Optional(ATTR_VALUES): vol.All(
-        cv.ensure_list, [vol.Any(None, bool, int, float, str)]
+    probatio.Optional(ATTR_VALUES): probatio.All(
+        cv.ensure_list, [probatio.Any(None, bool, int, float, str)]
     ),
-    vol.Optional(ATTR_PERSIST, default=False): cv.boolean,
+    probatio.Optional(ATTR_PERSIST, default=False): cv.boolean,
 }
 SELECT_RECORD_SCHEMA = {
-    vol.Required(CONF_ROWNUMBER): vol.All(vol.Coerce(int), vol.Range(min=0))
+    probatio.Required(CONF_ROWNUMBER): probatio.All(
+        probatio.Coerce(int), probatio.Range(min=0)
+    )
 }
 
 

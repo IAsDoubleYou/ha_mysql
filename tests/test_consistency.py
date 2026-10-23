@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 from typing import get_args
 
-import voluptuous as vol
+import probatio
 import yaml
 
 from custom_components.ha_mysql.const import SERVICE_SELECT_RECORD, SERVICE_SET_QUERY
@@ -145,11 +145,11 @@ def test_service_fields_match_the_schema_one_to_one() -> None:
         assert set(fields) == set(keys) == set(STRINGS["services"][service]["fields"])
         for name, field in fields.items():
             key = keys[name]
-            assert field.get("required", False) is isinstance(key, vol.Required), (
+            assert field.get("required", False) is isinstance(key, probatio.Required), (
                 service,
                 name,
             )
-            if key.default is vol.UNDEFINED:
+            if key.default is probatio.UNDEFINED:
                 assert "default" not in field, (service, name)
             else:
                 assert field["default"] == key.default(), (service, name)

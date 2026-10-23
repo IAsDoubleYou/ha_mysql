@@ -8,7 +8,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import (
@@ -86,7 +86,7 @@ _BASE_ERRORS = ("cannot_connect", "unknown")
 PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 
 
-def _connection_schema(*, editing: bool = False) -> vol.Schema:
+def _connection_schema(*, editing: bool = False) -> probatio.Schema:
     """Return the form for the connection settings.
 
     Editing makes the password optional: the stored one is not shown, so a
@@ -94,32 +94,32 @@ def _connection_schema(*, editing: bool = False) -> vol.Schema:
     suggestions, without the password.
     """
     password = (
-        vol.Optional(CONF_MYSQL_PASSWORD)
+        probatio.Optional(CONF_MYSQL_PASSWORD)
         if editing
-        else vol.Required(CONF_MYSQL_PASSWORD)
+        else probatio.Required(CONF_MYSQL_PASSWORD)
     )
-    return vol.Schema(
+    return probatio.Schema(
         {
-            vol.Required(CONF_MYSQL_HOST): TextSelector(),
-            vol.Required(CONF_MYSQL_PORT, default=DEFAULT_PORT): NumberSelector(
+            probatio.Required(CONF_MYSQL_HOST): TextSelector(),
+            probatio.Required(CONF_MYSQL_PORT, default=DEFAULT_PORT): NumberSelector(
                 NumberSelectorConfig(
                     min=1, max=65535, step=1, mode=NumberSelectorMode.BOX
                 )
             ),
-            vol.Required(CONF_MYSQL_USERNAME): TextSelector(),
+            probatio.Required(CONF_MYSQL_USERNAME): TextSelector(),
             password: PASSWORD_SELECTOR,
-            vol.Required(CONF_MYSQL_DATABASE): TextSelector(),
-            vol.Required(CONF_USE_TLS, default=DEFAULT_USE_TLS): BooleanSelector(),
+            probatio.Required(CONF_MYSQL_DATABASE): TextSelector(),
+            probatio.Required(CONF_USE_TLS, default=DEFAULT_USE_TLS): BooleanSelector(),
         }
     )
 
 
 CONNECTION_SCHEMA = _connection_schema()
 RECONFIGURE_SCHEMA = _connection_schema(editing=True)
-REAUTH_SCHEMA = vol.Schema(
+REAUTH_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_MYSQL_USERNAME): TextSelector(),
-        vol.Required(CONF_MYSQL_PASSWORD): PASSWORD_SELECTOR,
+        probatio.Required(CONF_MYSQL_USERNAME): TextSelector(),
+        probatio.Required(CONF_MYSQL_PASSWORD): PASSWORD_SELECTOR,
     }
 )
 
@@ -151,7 +151,7 @@ def _without_password(settings: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in settings.items() if key != CONF_MYSQL_PASSWORD}
 
 
-def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+def _sensor_schema(defaults: dict[str, Any] | None = None) -> probatio.Schema:
     """Build the form for a single sensor, prefilled with the current values."""
     current = defaults or {}
 
@@ -159,13 +159,15 @@ def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         value = current.get(key, fallback)
         return {} if value is None else {"suggested_value": value}
 
-    return vol.Schema(
+    return probatio.Schema(
         {
-            vol.Required(CONF_NAME, description=suggest(CONF_NAME)): TextSelector(),
-            vol.Required(CONF_QUERY, description=suggest(CONF_QUERY)): TextSelector(
-                TextSelectorConfig(multiline=True)
-            ),
-            vol.Required(
+            probatio.Required(
+                CONF_NAME, description=suggest(CONF_NAME)
+            ): TextSelector(),
+            probatio.Required(
+                CONF_QUERY, description=suggest(CONF_QUERY)
+            ): TextSelector(TextSelectorConfig(multiline=True)),
+            probatio.Required(
                 CONF_SCAN_INTERVAL,
                 description=suggest(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_SECONDS),
             ): NumberSelector(
@@ -173,16 +175,16 @@ def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     min=1, max=86400, step=1, mode=NumberSelectorMode.BOX
                 )
             ),
-            vol.Optional(
+            probatio.Optional(
                 CONF_VALUE_COLUMN, description=suggest(CONF_VALUE_COLUMN)
             ): TextSelector(),
-            vol.Optional(
+            probatio.Optional(
                 CONF_VALUE_TEMPLATE, description=suggest(CONF_VALUE_TEMPLATE)
             ): TemplateSelector(),
-            vol.Optional(
+            probatio.Optional(
                 CONF_UNIT_OF_MEASUREMENT, description=suggest(CONF_UNIT_OF_MEASUREMENT)
             ): TextSelector(),
-            vol.Optional(
+            probatio.Optional(
                 CONF_DEVICE_CLASS, description=suggest(CONF_DEVICE_CLASS)
             ): SelectSelector(
                 SelectSelectorConfig(
@@ -190,7 +192,7 @@ def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     mode=SelectSelectorMode.DROPDOWN,
                 )
             ),
-            vol.Optional(
+            probatio.Optional(
                 CONF_STATE_CLASS, description=suggest(CONF_STATE_CLASS)
             ): SelectSelector(
                 SelectSelectorConfig(
@@ -198,13 +200,13 @@ def _sensor_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     mode=SelectSelectorMode.DROPDOWN,
                 )
             ),
-            vol.Optional(
+            probatio.Optional(
                 CONF_SUGGESTED_DISPLAY_PRECISION,
                 description=suggest(CONF_SUGGESTED_DISPLAY_PRECISION),
             ): NumberSelector(
                 NumberSelectorConfig(min=0, max=6, step=1, mode=NumberSelectorMode.BOX)
             ),
-            vol.Required(
+            probatio.Required(
                 CONF_MAX_JSON_ROWS,
                 description=suggest(CONF_MAX_JSON_ROWS, DEFAULT_MAX_JSON_ROWS),
             ): NumberSelector(
@@ -554,9 +556,9 @@ class HAMySQLOptionsFlow(OptionsFlowWithReload):
 
         return self.async_show_form(
             step_id="select_sensor",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(CONF_UNIQUE_ID): SelectSelector(
+                    probatio.Required(CONF_UNIQUE_ID): SelectSelector(
                         SelectSelectorConfig(
                             options=[
                                 {
@@ -638,9 +640,9 @@ class HAMySQLOptionsFlow(OptionsFlowWithReload):
 
         return self.async_show_form(
             step_id="remove_sensor",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(CONF_SENSORS): SelectSelector(
+                    probatio.Required(CONF_SENSORS): SelectSelector(
                         SelectSelectorConfig(
                             options=[
                                 {

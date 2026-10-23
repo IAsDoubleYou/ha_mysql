@@ -47,10 +47,12 @@ With `value_column: total`, `unit_of_measurement: kWh`, `device_class: energy` a
 
 | | |
 |---|---|
-| Home Assistant | 2026.3.0 or newer |
+| Home Assistant | 2026.9.0 or newer |
 | Database | MySQL 5.7+ or MariaDB 10.3+ |
 | Driver | `aiomysql` 0.3.2, installed automatically |
 | Network | The database has to be reachable from the machine running Home Assistant |
+
+Note: This integration closely follows the latest Home Assistant releases. Keeping Home Assistant up-to-date is recommended to receive the newest updates and features of this component.
 
 The integration only reads. A user with `SELECT` rights on the tables you query is enough:
 

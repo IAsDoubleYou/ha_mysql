@@ -6,9 +6,9 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import probatio
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState, ConfigFlowResult
@@ -836,7 +836,7 @@ async def test_reconfigure_does_not_send_the_password(
     password = next(
         field for field in result["data_schema"].schema if str(field) == "password"
     )
-    assert password.default is vol.UNDEFINED
+    assert password.default is probatio.UNDEFINED
 
 
 async def test_reconfigure_with_a_new_password(
