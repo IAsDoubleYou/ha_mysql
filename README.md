@@ -489,6 +489,22 @@ SELECT * FROM personnel.dept
 
 The user has to have `SELECT` rights on that database as well.
 
+## HA MySQL or the SQL integration of Home Assistant?
+
+Home Assistant's own [SQL integration](https://www.home-assistant.io/integrations/sql/) reads from any database SQLAlchemy supports, and is the natural choice for a single value from SQLite or PostgreSQL. HA MySQL is built for MySQL and MariaDB only, and adds:
+
+| | **HA MySQL** | **SQL integration** |
+|---|---|---|
+| Driver | aiomysql, asynchronous on the event loop | SQLAlchemy, synchronous in executor threads |
+| Read only | Checked on the query text, and every session is read only, so the database refuses a write | Checked on the query text |
+| A query that stops answering | Times out after 30 seconds | No timeout of its own |
+| Change a query at runtime | `ha_mysql.set_query`, with `%s` values, optionally kept across restarts | No |
+| Result | Row count as state, one selected row as attributes, the whole result set as JSON | The last row returned |
+| Connection | Separate fields, sign in again when the password is refused, TLS that refuses to fall back to plain text | A database URL with the password in it |
+| Requirements | aiomysql | SQLAlchemy and sqlparse, plus a MySQL driver for the URL |
+
+Both share a connection pool between the sensors of one database.
+
 ## HA MySQL or MySQL Query?
 
 Two integrations, two different jobs. They can be installed side by side.
