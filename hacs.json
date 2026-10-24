@@ -1,7 +1,5 @@
 {
   "name": "HA MySQL",
   "homeassistant": "2026.9.0",
-  "render_readme": true,
-  "zip_release": true,
-  "filename": "homeassistant-ha_mysql.zip"
+  "render_readme": true
 }
