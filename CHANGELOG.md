@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-10-24
+
+HACS installs from the release zip again. Nothing changes for a connection or a sensor that is already set up.
+
+### Changed
+
+- **`zip_release` and `filename` are back in `hacs.json`.** GitHub has shrunk the headers of its release-download redirect, so HACS can download the release zip again (see [hacs/integration#5643](https://github.com/hacs/integration/issues/5643)). This undoes the workaround of 2.2.0, and the downloads badge counts the installs through HACS again.
+
 ## [2.2.0] - 2026-10-24
 
 Diagnostics for the connection, and HACS installs the integration file by file for now. Nothing changes for a connection or a sensor that is already set up.
@@ -295,6 +303,7 @@ keep the entity IDs and the history they already had.
 See the [releases page](https://github.com/IAsDoubleYou/ha_mysql/releases) for
 the notes of 1.0.3 and older.
 
+[2.2.1]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.2.1
 [2.2.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.2.0
 [2.1.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.1.0
 [2.0.0]: https://github.com/IAsDoubleYou/ha_mysql/releases/tag/v2.0.0
