@@ -12,36 +12,17 @@
 
 > **Looking to run one-off queries or write to the database, instead of tracking a value continuously?** See [MySQL Query](https://github.com/IAsDoubleYou/homeassistant-mysql_query), a sibling integration built for that — full comparison at the [bottom of this README](#ha-mysql-or-mysql-query).
 
-Home Assistant custom integration that turns the result of a MySQL or MariaDB query into a sensor.
-
-Every sensor runs its own query on its own interval. The result is available in three ways:
-
-* the **state** of the sensor,
-* the columns of one selected row as **`valueof_*` attributes**,
-* the complete result set as JSON in the **`json_result` attribute**.
-
-Queries can be replaced at runtime with the [`ha_mysql.set_query`](#ha_mysqlset_query) action, which makes it possible to build queries that depend on information only known at runtime.
-
-## Key Features
-
-- **UI configuration**: add a connection and its sensors from the user interface, change the connection later with **Reconfigure**, and sign in again from a prompt when the database refuses the credentials.
-- **One sensor per query**: each sensor runs its own query on its own interval, and reports the state, the columns of one row and the whole result set.
-- **Read only by design**: queries are checked before they run, and every session the integration opens is read only, so the database refuses a write whatever the query says.
-- **Queries that change at runtime**: replace a query with `ha_mysql.set_query`, pass values separately with `%s` placeholders, and step through the rows with `ha_mysql.select_record`.
-- **Robust**: one shared pool per connection, a connection the server dropped is rebuilt by itself, and queries never block Home Assistant.
-- **Multiple databases**: add the integration once per database.
-- **Optional TLS**: encrypt the connection, with a refusal instead of a silent fallback to plain text.
-- **JSON-safe results**: MySQL types such as `DECIMAL`, `DATE` and `TIME` are converted automatically.
+A Home Assistant custom integration that turns the result of a MySQL or MariaDB query into a sensor. Every sensor runs its own query on its own interval, and the result is available as the **state**, as the columns of one selected row in **`valueof_*` attributes**, and as the whole result set in the **`json_result` attribute**. A query can be replaced at runtime with [`ha_mysql.set_query`](#ha_mysqlset_query).
 
 ## Why HA MySQL?
 
-- **Made for MySQL and MariaDB**: an asynchronous driver, one shared pool per connection and a timeout on every query, so a slow database never holds up Home Assistant.
-- **Safe by design**: every session is read only, so the database itself refuses a write.
-- **Flexible at runtime**: change a sensor's query from an automation, and use the whole result set, not just one value.
+- **Asynchronous**: built for MySQL and MariaDB on an asynchronous driver, with one shared pool per connection and a timeout on every query, so a slow database never holds up Home Assistant.
+- **Strictly read only**: queries are checked before they run, and every session is read only, so the database itself refuses a write.
+- **Diagnostics**: download a file with the settings, queries and pool status of a connection, with the credentials masked, when something goes wrong.
 
 ## What is the state of the sensor?
 
-**By default the state is the number of rows the query returned**, not a value from the result set. This surprises most people at first, so it is worth repeating.
+**By default the state is the number of rows the query returned**, not a value from the result set. This surprises most people at first.
 
 ```sql
 SELECT name, salary FROM emp
@@ -53,216 +34,141 @@ SELECT name, salary FROM emp
 | `valueof_name` | `Alice` |
 | `valueof_salary` | `1000.50` |
 
-If you want an actual measurement as the state, set [`value_column`](#sensor-options) or [`value_template`](#sensor-options). That is also what you need for the energy dashboard and long term statistics.
-
-```sql
-SELECT SUM(kwh) AS total FROM energy WHERE DATE(logged_at) = CURDATE()
-```
-
-With `value_column: total`, `unit_of_measurement: kWh`, `device_class: energy` and `state_class: total_increasing`, the state becomes the number itself.
+For an actual measurement as the state, set [`value_column`](#configuration) or [`value_template`](#configuration). That is also what the energy dashboard and long term statistics need.
 
 ## Requirements
 
-| | |
-|---|---|
-| Home Assistant | 2026.9.0 or newer |
-| Database | MySQL 5.7+ or MariaDB 10.3+ |
-| Driver | `aiomysql` 0.3.2, installed automatically |
-| Network | The database has to be reachable from the machine running Home Assistant |
+- Home Assistant 2026.9.0 or newer.
+- MySQL 5.7+ or MariaDB 10.3+, reachable from the machine running Home Assistant.
+- The `aiomysql` driver, which Home Assistant installs automatically.
 
 Note: This integration closely follows the latest Home Assistant releases. Keeping Home Assistant up-to-date is recommended to receive the newest updates and features of this component.
 
-The integration only reads. A user with `SELECT` rights on the tables you query is enough:
+The integration only reads, so a user with `SELECT` rights on the tables you query is enough:
 
 ```sql
 CREATE USER 'homeassistant'@'%' IDENTIFIED BY 'a-good-password';
 GRANT SELECT ON mydatabase.* TO 'homeassistant'@'%';
-FLUSH PRIVILEGES;
 ```
-
-## Read-only by design
-
-This is a sensor integration, so it never writes, and that is enforced twice:
-
-* A query is checked, wherever it comes from, the user interface or [`ha_mysql.set_query`](#ha_mysqlset_query), before it is stored or run. A query with more than one statement, or one that is not `SELECT`-style, is refused with the reason logged or shown on the form; nothing invalid is ever sent to the database. A `SET` is refused as well, so a query cannot lift the second line.
-* Every connection the integration opens is set to read only (`SET SESSION TRANSACTION READ ONLY`) before its first query, also after the server dropped an idle connection and it was rebuilt. The database itself then refuses an `INSERT`, an `UPDATE`, a `DELETE` or a temporary table, with error 1792, whatever the query says.
-
-**What this does not protect against.** The first line reads the leading keyword of the query; it is not a full security boundary, and a read only session is a safeguard rather than a substitute for rights. A `SELECT` can still write a file through `INTO OUTFILE` when the user has the `FILE` privilege. The database user having only `SELECT` rights, as shown above, is what actually stops a write.
 
 ## Installation
 
 ### Using [HACS](https://hacs.xyz/)
 
-Add this repository as a custom repository, following [these directions](https://hacs.xyz/docs/faq/custom_repositories/), using `https://github.com/IAsDoubleYou/ha_mysql` as the repository URL. Install **HA MySQL** and restart Home Assistant.
+- Add `https://github.com/IAsDoubleYou/ha_mysql` as a [custom repository](https://hacs.xyz/docs/faq/custom_repositories/) of type Integration.
+- Download **HA MySQL** and restart Home Assistant.
 
 ### Manual
 
-1. Download `homeassistant-ha_mysql.zip` from the [latest release](https://github.com/IAsDoubleYou/ha_mysql/releases/latest).
-2. Open the directory of your Home Assistant configuration, the one holding `configuration.yaml`.
-3. Create a `custom_components` directory there if it does not exist yet.
-4. Inside `custom_components`, create a directory called `ha_mysql`.
-5. Unpack the zip into it, so `manifest.json` ends up as `custom_components/ha_mysql/manifest.json`.
-6. Restart Home Assistant.
+- Download `homeassistant-ha_mysql.zip` from the [latest release](https://github.com/IAsDoubleYou/ha_mysql/releases/latest).
+- Extract it straight into `custom_components/ha_mysql` (the archive has no top-level folder) and restart Home Assistant.
 
-## Configuration through the user interface
+---
 
-1. Go to **Settings → Devices & services → Add integration**.
-2. Search for **HA MySQL**.
-3. Fill in the connection details. The connection is tested before it is saved, so mistakes are reported right away.
-4. Open **Configure** on the integration card to add sensors.
+## Configuration
 
-Every connection becomes one device, with all its sensors underneath it. Sensors are added, edited and removed through **Configure**; changes take effect immediately, without a restart.
+1. Go to **Settings → Devices & services → Add integration** and search for **HA MySQL**.
+2. Fill in the connection. It is tested before it is saved, so mistakes are reported right away.
+3. Open **Configure** on the integration card to add sensors. Changes take effect immediately, without a restart.
 
-The connection itself, the host, port, username, password, database and TLS, is changed with **Reconfigure**, in the **⋮** menu of the connection. The new settings are tested before they are saved. The password field starts empty: leave it empty to keep the current password. When the database refuses the stored username or password, Home Assistant asks you to sign in again; the connection is then updated, not added a second time.
+Every connection becomes one device with its sensors underneath it. Add the integration once per database.
 
-### Connection options
+| Setting | Key | Default | Where | Description |
+|---|---|---|---|---|
+| Host | `host` | | Connection | Host name or IP address of the server |
+| Port | `port` | `3306` | Connection | Port the server listens on |
+| Username | `username` | | Connection | User the queries run as |
+| Password | `password` | | Connection | Password of that user. Leave empty on **Reconfigure** to keep it |
+| Database name | `database` | | Connection | Database the connection opens |
+| Encrypt the connection (TLS) | `use_tls` | off | Connection | See [Encrypting the connection](#encrypting-the-connection) |
+| Name | `name` | | Sensor | Name of the sensor, combined with the device name for its entity ID |
+| Query | `query` | | Sensor | One `SELECT`-style statement |
+| Update interval (seconds) | `scan_interval` | `30` | Sensor | Seconds between two runs of the query |
+| Value column | `value_column` | | Sensor | Column of the selected row to use as the state, instead of the row count |
+| Value template | `value_template` | | Sensor | Template that produces the state. Takes precedence over the value column |
+| Unit of measurement | `unit_of_measurement` | | Sensor | For example `kWh` or `°C` |
+| Device class | `device_class` | | Sensor | A [sensor device class](https://www.home-assistant.io/integrations/sensor/#device-class), for example `energy` |
+| State class | `state_class` | | Sensor | `measurement`, `total` or `total_increasing`. Needed for long term statistics |
+| Display precision | `suggested_display_precision` | | Sensor | Number of decimals shown |
+| Maximum rows in json_result | `max_json_rows` | `0` | Sensor | `0` keeps all rows |
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| Host | yes | | Host name or IP address of the database server |
-| Port | yes | `3306` | Port the server listens on |
-| Username | yes | | User the queries run as |
-| Password | yes | | Password of that user |
-| Database name | yes | | Database the connection opens |
-| Encrypt the connection (TLS) | no | off | See [Encrypting the connection](#encrypting-the-connection) |
+The connection (host, port, username, password, database and TLS) is changed with **Reconfigure** in the **⋮** menu of the connection; the new settings are tested first. When the database refuses the stored credentials, Home Assistant asks you to sign in again and updates the connection instead of adding a second one. Sensors are added, edited and removed through **Configure**.
 
-### Upgrading from 1.x
-
-Release 2.0.0 no longer reads `configuration.yaml`. The connection and the sensors that earlier releases imported from it are stored in Home Assistant and keep working, with the same entity IDs and the same history. Remove the `ha_mysql:` section and the sensors with `platform: ha_mysql` from `configuration.yaml`; Home Assistant reports them for as long as they are there.
-
-Two things to check:
-
-* The sensors are the ones that were imported the last time Home Assistant started with an earlier release. A change made in `configuration.yaml` after that is not in them: look at the sensors under **Configure**.
-* A YAML configuration that was never imported, because it never started with a release that did, is not picked up. Add the connection and its sensors through the user interface.
+If `unit_of_measurement`, `state_class` or `suggested_display_precision` is set, the state has to be numeric. A value that cannot be read as a number becomes `unknown` and is reported once in the log.
 
 ### Encrypting the connection
 
-By default the connection to the database is **not encrypted**. Turning on **Encrypt the connection (TLS)** makes the integration negotiate TLS when it connects.
+TLS is off by default. With **Encrypt the connection (TLS)** on, the traffic, including the password, can no longer be read on the network. The server's certificate is **not verified**, because home databases nearly always use a self signed one, so this protects against eavesdropping but not against someone who actively intercepts the connection.
 
-**What it does and does not protect.** The traffic is encrypted, so someone watching the network between Home Assistant and the database cannot read your queries or the password used to log in. The server's certificate is **not verified**, though — neither its signature nor its hostname — because a database on a home network nearly always carries a self signed one, and requiring a verifiable certificate would make this option unusable for most people. So this defends against passive eavesdropping, but not against an attacker who can actively intercept the connection and present a certificate of their own.
+The server must support TLS. If it does not, the connection is refused with a message instead of quietly falling back to plain text. `SHOW GLOBAL VARIABLES LIKE 'have_ssl';` returns `YES` when it does.
 
-**The server has to support it.** If the database has no TLS configured, the connection is refused with a clear message rather than quietly falling back to an unencrypted one; that silent fallback is what the driver does on its own, and it is exactly what this option exists to prevent. You can check what your server offers with:
+### Several databases
 
-```sql
-SHOW GLOBAL VARIABLES LIKE 'have_ssl';
-```
+Add the integration once per database. A query can also read another database on the same server by qualifying the table, as in `SELECT * FROM personnel.dept`, if the user has `SELECT` rights there.
 
-`YES` means TLS is available. `DISABLED` or `NO` means you need to configure a certificate on the database first, or leave this option off.
+---
 
-### Sensor options
+## Read only by design
 
-These are the fields of the sensor form under **Configure**. The name between brackets is how the field is called in the log messages and in this README.
+This is a sensor integration, so it never writes, and that is enforced twice:
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| Name (`name`) | yes | | Name of the sensor. Combined with the connection's device name for a new sensor's entity ID and friendly name |
-| Query (`query`) | yes | | SQL query to run |
-| Update interval (seconds) (`scan_interval`) | no | `30` | Seconds between two runs of the query |
-| Value column (`value_column`) | no | | Column of the selected row to use as the state, instead of the row count |
-| Value template (`value_template`) | no | | Template that produces the state. Takes precedence over the value column |
-| Unit of measurement (`unit_of_measurement`) | no | | Unit shown behind the value, for example `kWh` or `°C` |
-| Device class (`device_class`) | no | | [Sensor device class](https://www.home-assistant.io/integrations/sensor/#device-class), for example `energy` or `temperature` |
-| State class (`state_class`) | no | | `measurement`, `total` or `total_increasing`. Needed for long term statistics |
-| Display precision (`suggested_display_precision`) | no | | Number of decimals shown in the interface |
-| Maximum rows in json_result (`max_json_rows`) | no | `0` | Maximum number of rows in `json_result`. `0` keeps all of them |
+- **The query is checked** before it is stored or run, wherever it comes from. More than one statement, anything that is not `SELECT`-style, or a `SET`, is refused with the reason in the form or the log.
+- **Every session is read only** (`SET SESSION TRANSACTION READ ONLY` before the first query, also after a dropped connection is rebuilt). The database itself then refuses an `INSERT`, `UPDATE`, `DELETE` or temporary table with error 1792.
 
-Whenever `unit_of_measurement`, `state_class` or `suggested_display_precision` is set, the state has to be numeric. A value that cannot be read as a number becomes `unknown` and is reported once in the log.
+Neither is a full security boundary: a `SELECT` can still write a file with `INTO OUTFILE` when the user has the `FILE` privilege. The database user having only `SELECT` rights, as shown above, is what actually stops a write.
+
+## Results
 
 ### Template variables
 
-`value_template` is rendered with these variables:
-
-| Variable | Description |
-|---|---|
-| `row` | The selected row as a dictionary, or `none` when the result set is empty |
-| `rows` | All rows as a list of dictionaries |
-| `row_count` | The number of rows |
+`value_template` is rendered with `row` (the selected row as a dictionary, or `none` when empty), `rows` (all rows) and `row_count`.
 
 | Value template | Result set | State |
 |---|---|---|
 | `{{ row.salary \| float * 1.21 }}` | `row.salary` is `1000.50` | `1210.605` |
-| `{{ rows \| map(attribute='kwh') \| map('float') \| sum }}` | rows with `kwh` 1.2, 0.8 and 2.1 | `4.1` |
+| `{{ rows \| map(attribute='kwh') \| map('float') \| sum }}` | `kwh` 1.2, 0.8 and 2.1 | `4.1` |
 | `{{ 'busy' if row_count > 10 else 'quiet' }}` | 2 rows, or 15 rows | `quiet`, or `busy` |
 
 ### Attributes
 
-Every sensor exposes these attributes:
-
 | Attribute | Description |
 |---|---|
-| `valueof_<column>` | The value of that column in the selected row. One attribute per column |
-| `selected_row` | Index of the selected row, or `-1` when the result set is empty |
+| `valueof_<column>` | The value of that column in the selected row, one attribute per column. The prefix avoids clashes such as `friendly_name` |
+| `selected_row` | Index of the selected row, or `-1` when the result is empty |
 | `row_count` | Number of rows the query returned |
-| `json_result` | The complete result set as a JSON string, or `{}` when it is empty |
+| `json_result` | The complete result set as a JSON string, or `{}` when empty |
 | `json_result_truncated` | Only present, and `true`, when `max_json_rows` cut the result short |
-| `executed_sql_query` | The query that produced this result, including one set with `set_query` |
-| `query_date` | Date the query ran, as `YYYY-MM-DD` |
-| `query_time` | Time the query ran, as `HH:MM:SS` |
+| `executed_sql_query` | The query that produced the result, including one set with `set_query` |
+| `query_date`, `query_time` | When the query ran, as `YYYY-MM-DD` and `HH:MM:SS` |
 
-The `valueof_` prefix avoids collisions with attributes such as `friendly_name`. A column named `friendly_name` becomes `valueof_friendly_name`.
-
-`json_result`, `json_result_truncated`, `executed_sql_query`, `query_date` and `query_time` are in the current state, but not in the history: the recorder leaves them out. The query time changes on every run, so recording these would store a new copy of the whole result set on every update. The state and the other attributes are recorded as usual.
+`json_result`, `json_result_truncated`, `executed_sql_query`, `query_date` and `query_time` are in the current state but not in the history, because the recorder leaves them out. Otherwise every run would store a new copy of the result set.
 
 ### Column types
 
-Most columns come back as the type you would expect. These are converted so they can be stored in a state, in an attribute and in `json_result`:
-
 | Column type | Becomes |
 |---|---|
-| `DECIMAL`, `NUMERIC` | A string, for example `1000.50`. Use `float` in a template to calculate with it |
-| `BINARY`, `VARBINARY`, `BLOB` | The text it holds. Data that is not valid UTF-8 becomes a short hexadecimal preview such as `0x89504e47...` |
-| `TIME` | A readable duration, for example `1:30:00` |
+| `DECIMAL`, `NUMERIC` | A string such as `1000.50`. Use `float` in a template to calculate with it |
+| `BINARY`, `VARBINARY`, `BLOB` | The text it holds, or a short hexadecimal preview such as `0x89504e47...` when it is not valid UTF-8 |
+| `TIME` | A readable duration such as `1:30:00` |
 | `SET` | A sorted list of the selected members |
-| `DATE`, `DATETIME`, `TIMESTAMP` | Left as they are, so `device_class: date` and `device_class: timestamp` work |
-| `NULL` | `None`, which shows up as `unknown` in the state |
+| `DATE`, `DATETIME`, `TIMESTAMP` | Left as they are, so `device_class: date` and `timestamp` work |
+| `NULL` | `None`, shown as `unknown` in the state |
 
-Storing an image or another large binary value in a sensor is a bad idea regardless. Select it as a length or a checksum instead, for example `SELECT LENGTH(photo) AS bytes FROM staff`.
+Do not select an image or another large binary value. Select a length or checksum instead, for example `SELECT LENGTH(photo) AS bytes FROM staff`.
+
+---
 
 ## Examples
 
-Each example is a sensor added through **Configure → Add a sensor**. Fields that are not listed keep their default.
+Sensors are added through **Configure → Add a sensor**. Fields that are not listed keep their default.
 
 ### Daily energy consumption
 
 ```sql
-SELECT ROUND(SUM(kwh), 3) AS total
-FROM energy_log
-WHERE DATE(logged_at) = CURDATE()
+SELECT ROUND(SUM(kwh), 3) AS total FROM energy_log WHERE DATE(logged_at) = CURDATE()
 ```
 
-| Field | Value |
-|---|---|
-| Name | `Energy today` |
-| Update interval (seconds) | `300` |
-| Value column | `total` |
-| Unit of measurement | `kWh` |
-| Device class | `energy` |
-| State class | `total_increasing` |
-| Display precision | `2` |
-
-Because of the device class `energy` and the state class `total_increasing`, it can be added under **Settings → Dashboards → Energy** as a consumption source.
-
-### Temperature from a logging table
-
-```sql
-SELECT temperature, measured_at
-FROM measurements
-WHERE sensor_id = 3
-ORDER BY measured_at DESC
-LIMIT 1
-```
-
-| Field | Value |
-|---|---|
-| Name | `Greenhouse temperature` |
-| Update interval (seconds) | `60` |
-| Value column | `temperature` |
-| Unit of measurement | `°C` |
-| Device class | `temperature` |
-| State class | `measurement` |
-| Display precision | `1` |
-
-`valueof_measured_at` tells you how old the reading is.
+Set the update interval to `300`, the value column to `total`, the unit to `kWh`, the device class to `energy` and the state class to `total_increasing`. The sensor can then be added under **Settings → Dashboards → Energy** as a consumption source.
 
 ### Counting rows
 
@@ -272,38 +178,7 @@ The default behaviour, useful for queues, open orders or unread messages.
 SELECT id, customer, total FROM orders WHERE status = 'open'
 ```
 
-| Field | Value |
-|---|---|
-| Name | `Open orders` |
-| Update interval (seconds) | `120` |
-
-The state is the number of open orders, and `valueof_customer` shows the first one. Use [`ha_mysql.select_record`](#ha_mysqlselect_record) to walk through the others.
-
-### A list without flooding the database
-
-```sql
-SELECT moment, message FROM alarms ORDER BY moment DESC
-```
-
-| Field | Value |
-|---|---|
-| Name | `Recent alarms` |
-| Update interval (seconds) | `600` |
-| Maximum rows in json_result | `20` |
-
-### Building a template sensor on top of it
-
-Handy when you want several values from one query without running it more than once.
-
-```yaml
-template:
-  - sensor:
-      - name: Greenhouse humidity
-        state: "{{ state_attr('sensor.greenhouse_temperature', 'valueof_humidity') }}"
-        unit_of_measurement: "%"
-        device_class: humidity
-        state_class: measurement
-```
+The state is the number of open orders and `valueof_customer` shows the first one. Use [`ha_mysql.select_record`](#ha_mysqlselect_record) to walk through the others.
 
 ### A query that depends on runtime information
 
@@ -323,30 +198,24 @@ automation:
             - "{{ states('input_text.customer_id') }}"
 ```
 
-The value is bound to the `%s` placeholder instead of being pasted into the query text, so whatever `input_text.customer_id` holds cannot change what the statement does. See [Parameterized queries](#parameterized-queries-with-values) below.
+The value is bound to the `%s` placeholder instead of being pasted into the query, so whatever the helper holds cannot change what the statement does.
+
+---
 
 ## Actions
 
 ### `ha_mysql.set_query`
 
-Replaces the query of a sensor and refreshes it right away. Only a single, reading statement is allowed — the same restriction as everywhere else a query enters ha_mysql; see [Read-only by design](#read-only-by-design).
+Replaces the query of a sensor and refreshes it right away. Only a single reading statement is allowed, as everywhere else a query enters ha_mysql.
 
 | Field | Required | Description |
 |---|---|---|
 | `entity_id` | yes | The sensor or sensors to change |
-| `query` | no | The query to run from now on. Leave it out, or empty, to restore the query from the configuration |
-| `values` | no | List of values for the `%s` placeholders in `query`, in the order they appear. Requires a new `query` in the same call — see [Parameterized queries](#parameterized-queries-with-values) |
-| `persist` | no | Save this query (and its `values`) so a restart re-runs it through the sensor's normal polling, instead of falling back to the query configured for the sensor. Off by default |
+| `query` | no | The query to run from now on. Leave it out, or empty, to restore the configured query |
+| `values` | no | Values for the `%s` placeholders in `query`, in order. Requires a new `query` in the same call |
+| `persist` | no | Keep the replacement (and its `values`) across a restart. Off by default |
 
-```yaml
-action: ha_mysql.set_query
-target:
-  entity_id: sensor.department
-data:
-  query: SELECT 'Hello Friends' FROM DUAL
-```
-
-By default the replacement lasts until it is replaced again, or until Home Assistant restarts — at which point the sensor goes back to running the query from its own configuration. Add `persist: true` to keep the replacement across a restart too:
+By default the replacement lasts until it is replaced again or Home Assistant restarts, after which the sensor runs its configured query again. With `persist: true` it survives the restart, which suits a sensor that only shows the result of a runtime lookup. Restoring the configured query always drops a persisted replacement. The selected row is reset to the first one, and the active query is always readable in `executed_sql_query`.
 
 ```yaml
 action: ha_mysql.set_query
@@ -359,44 +228,21 @@ data:
   persist: true
 ```
 
-This is what makes a sensor built purely to display the result of a runtime lookup - like the one above, whose own configured query is a placeholder that matches nothing - show the last real result again after a restart, instead of that placeholder's empty one. Restoring the configured query (`query` left out or empty) always drops a persisted replacement too, whether `persist` was used or not.
+#### Parameterized queries with `values`
 
-The selected row is reset to the first one. The query that is currently active is always available as the `executed_sql_query` attribute, so it can be read back and reused with new `values` later.
+Write a `%s` placeholder for each value and list the values in the same order. They travel to MySQL separately from the query text and the driver escapes each one, so a quote or semicolon in the data cannot change the statement.
 
-### Parameterized queries with `values`
-
-`values` is optional. Leave it out and the query is sent exactly as written.
-
-When you do use it, write a `%s` placeholder in the query for each value and list the values in the same order. The values then travel to MySQL separately from the query text, and the driver quotes and escapes each one according to its type. A quote, a semicolon or a stray backslash in the value can no longer change what the statement does:
+- Home Assistant renders templates in a value before the action runs, so a template that produces a number is bound as a number. The integration does not render values itself: a call through the REST API with `{{ ... }}` in a value binds that text.
+- A `%s` stands for exactly one value, never a list. Write one placeholder per value (`IN (%s, %s)`); the counts must match.
+- Once `values` is used, a literal `%` in the query must be doubled, or passed as a value:
 
 ```yaml
-action: ha_mysql.set_query
-target:
-  entity_id: sensor.department
-data:
-  query: SELECT * FROM emp WHERE department = %s AND active = %s
-  values:
-    - "{{ states('input_text.department') }}"
-    - 1
-```
-
-In an automation or script, Home Assistant renders a template in a value before the action runs, so a template that produces a number or a boolean is bound as such. The integration does not render values itself: a value is bound exactly as it arrives, so a call made through the REST API with `{{ ... }}` in a value binds that text. A `%s` always stands for exactly one value, never a list — `WHERE id IN (%s)` with a list of ids does not work; write one placeholder per value instead. The number of placeholders and the number of values must match, or MySQL rejects the query.
-
-As soon as `values` is used, the `%` character becomes special in the query text, the same way it would in Python string formatting. A literal percent sign then has to be doubled:
-
-```yaml
-# Wrong: the % of the LIKE pattern is read as a placeholder
-query: "SELECT * FROM emp WHERE name LIKE '%kitchen%' AND active = %s"
-
-# Correct: double the literal percent signs
-query: "SELECT * FROM emp WHERE name LIKE '%%kitchen%%' AND active = %s"
-
-# Better: pass the whole pattern as a value
-query: "SELECT * FROM emp WHERE name LIKE %s AND active = %s"
+query: "SELECT * FROM emp WHERE name LIKE '%%kitchen%%' AND active = %s"   # doubled
+query: "SELECT * FROM emp WHERE name LIKE %s AND active = %s"              # or a value
 values: ["%kitchen%", 1]
 ```
 
-This only applies once `values` is present. Without it, nothing in the query is interpreted and `LIKE '%kitchen%'` works as usual.
+Without `values`, nothing in the query is interpreted and `LIKE '%kitchen%'` works as usual.
 
 ### `ha_mysql.select_record`
 
@@ -405,7 +251,7 @@ Chooses which row of the result set is exposed through the `valueof_*` attribute
 | Field | Required | Description |
 |---|---|---|
 | `entity_id` | yes | The sensor or sensors to change |
-| `rownumber` | yes | Zero based index of the row. The first row is `0`, the last one is the row count minus 1 |
+| `rownumber` | yes | Zero based index of the row. A number beyond the result falls back to the first row and is logged |
 
 ```yaml
 action: ha_mysql.select_record
@@ -415,19 +261,17 @@ data:
   rownumber: 1
 ```
 
-A row number beyond the result set falls back to the first row and is reported in the log.
+---
 
 ## Diagnostics
 
-When you report a problem, download the diagnostics of the connection: **Settings** > **Devices & services** > **HA MySQL** > the **⋮** menu of the connection > **Download diagnostics**. The file holds the connection settings, the configuration and the queries of every sensor, the figures of the last run of each sensor and the size of the connection pool.
+When you report a problem, download the diagnostics: **Settings** > **Devices & services** > **HA MySQL** > the **⋮** menu of the connection > **Download diagnostics**. The file holds the connection settings, the configuration and queries of every sensor, the figures of the last run of each sensor and the size of the connection pool.
 
-The host, port, username, password and database name are masked, and so are the title and the unique ID of the connection, which are built from them. No row of the database is included. **The queries are**, because they are usually what needs looking at, so read them before you share the file.
+The host, port, username, password and database name are masked, and so are the title and unique ID of the connection. No row of the database is included. **The queries are**, because they are usually what needs looking at, so read them before you share the file.
 
 ## Troubleshooting
 
-### The sensor is `unavailable`
-
-The last query failed. The integration keeps trying on every interval and recovers on its own once the database answers again. Turn on debug logging to see the reason:
+Turn on debug logging to see why a query fails:
 
 ```yaml
 logger:
@@ -436,64 +280,29 @@ logger:
     custom_components.ha_mysql: debug
 ```
 
-### The integration does not start
-
-| Message | Cause |
+| Symptom | Cause and fix |
 |---|---|
-| Could not connect | Wrong host or port, a firewall in between, or the server is down or still starting. Home Assistant tries again by itself. Check with `telnet <host> 3306` from the Home Assistant machine |
-| The database refused the username or password | Wrong credentials, for instance after the password was changed on the server. Home Assistant asks you to sign in again |
-| The database does not exist, or its user has no access to it | Wrong database name, or the user has no rights on it. Correct it with **Reconfigure** |
-| The database server refused the connection | Waiting does not fix this, so it is not retried. The message gives the reason: the user may not connect from this host (MySQL rights are per host: `'user'@'localhost'` is not the same as `'user'@'%'`), the account is locked, or its password expired |
+| Sensor is `unavailable` | The last query failed. It is retried on every interval and recovers when the database answers again |
+| Could not connect | Wrong host or port, a firewall, or the server is down or starting. Home Assistant tries again by itself. Check with `telnet <host> 3306` from the Home Assistant machine |
+| The database refused the username or password | Wrong or changed credentials. Home Assistant asks you to sign in again |
+| The database does not exist, or its user has no access | Wrong name or missing rights. Correct it with **Reconfigure** |
+| The database server refused the connection | Not retried, because waiting does not fix it. MySQL rights are per host (`'user'@'localhost'` is not `'user'@'%'`), or the account is locked or its password expired |
 | Set to use TLS, but the server accepted the connection without encrypting it | Configure TLS on the database, or turn the option off with **Reconfigure** |
+| "Only SELECT-style statements are allowed" or "Only one statement is allowed" | ha_mysql only reads, see [Read only by design](#read-only-by-design). Split statements into separate sensors and replace writes with a `SELECT` |
+| State is `unknown` | The `value_column` is not in the result (the log lists the columns), the value is not numeric while a unit or class is set, or the query returned no rows |
+| State does not follow the data | Queries run every `scan_interval` seconds. Lower it, or call `homeassistant.update_entity` |
+| Energy dashboard or statistics reject the sensor | They need a numeric state with a `state_class`. Set `value_column` or `value_template` with `state_class` and `unit_of_measurement` |
+| Database or recorder grows quickly | A large `json_result` sits in the current state. Limit it with `max_json_rows` or narrow the query. Do not exclude the whole sensor from the recorder: that also drops its history and statistics |
+| Log says the value was cut off | A state holds at most 255 characters. Shorten the value in SQL or use an attribute |
+| Too many connections | Each connection uses at most ten, shared by its sensors. Raise `max_connections` on the server or use longer intervals |
 
-### A query is refused with "Only SELECT-style statements are allowed" or "Only one statement is allowed in a query"
+## Upgrading from 1.x
 
-ha_mysql only reads; see [Read-only by design](#read-only-by-design). Split a query that contains more than one statement, separated by `;`, into separate sensors, and replace `INSERT`, `UPDATE`, `DELETE` or any other write with a `SELECT`.
+Release 2.0.0 no longer reads `configuration.yaml`. The connection and sensors that earlier releases imported from it keep working, with the same entity IDs and history. Remove the `ha_mysql:` section and the `platform: ha_mysql` sensors from `configuration.yaml`.
 
-### The state is `unknown`
+The imported sensors are those from the last start with an earlier release, so look at them under **Configure**. A YAML configuration that was never imported is not picked up: add it through the user interface.
 
-* The column in `value_column` is not part of the result. The log lists the columns that are available.
-* The value is not numeric while a unit, device class or state class is set.
-* The query returned no rows at all. In that case `row_count` is `0` and `selected_row` is `-1`.
-
-### The state stays the same while the data changed
-
-Queries run every `scan_interval` seconds, 30 by default. Lower it, or call `homeassistant.update_entity` to force a refresh.
-
-### There are no statistics or the energy dashboard does not accept the sensor
-
-Statistics need a numeric state with a `state_class`. Set `value_column` or `value_template` together with `state_class` and `unit_of_measurement`.
-
-### The database or the recorder is growing quickly
-
-Since 1.7.0 the recorder leaves `json_result` and the other bulky attributes out (see [Attributes](#attributes)), so a sensor no longer stores a copy of its result set on every update. Do not exclude the whole sensor from the recorder for this: that also drops its history and its statistics.
-
-A large result still sits in the current state of the sensor, which the user interface loads. Limit it with `max_json_rows`, or narrow the query.
-
-### The log says the value was cut off
-
-A state can hold at most 255 characters. Longer values are truncated. Shorten the value in SQL, or move it into an attribute instead.
-
-### Too many connections
-
-Each connection uses a pool of at most ten connections, shared by all sensors of that connection. If your server is tight on `max_connections`, raise the server limit or spread the sensors over longer intervals.
-
-## Notes
-
-* All sensors of one connection share the same connection pool, so adding sensors does not add connections.
-* A connection that the server dropped, for example after `wait_timeout`, is rebuilt automatically. A restart of Home Assistant is not needed.
-* Queries run in the background and never block Home Assistant.
-* Only reading statements are allowed; see [Read-only by design](#read-only-by-design).
-
-## Multiple databases
-
-One database can be configured per connection, but the integration can be added more than once, each with its own database. A query can also read from another database on the same server by qualifying the table name:
-
-```sql
-SELECT * FROM personnel.dept
-```
-
-The user has to have `SELECT` rights on that database as well.
+---
 
 ## HA MySQL or MySQL Query?
 
@@ -503,11 +312,11 @@ Two integrations, two different jobs. They can be installed side by side.
 |---|---|---|
 | Approach | Automatic sensors | Actions (services) for scripts and automations |
 | Runs a query | On its own interval, per sensor | Only when you call the action |
-| Result ends up in | The state and the attributes of a sensor | The response of the action, and optionally in an event |
+| Result ends up in | The state and attributes of a sensor | The response of the action |
 | Creates entities | Yes, one sensor per query | No |
 | History and statistics | Yes, through the sensor | No |
-| Writing to the database | No, `SELECT` only | Yes, `INSERT`, `UPDATE` and `DELETE` as well |
-| Best for | Values you want to follow continuously, dashboards, the energy dashboard | Lookups on demand, queries with runtime parameters, changing data |
+| Writing to the database | No, `SELECT` only | Yes, `INSERT`, `UPDATE`, `DELETE` and DDL as well |
+| Best for | Values you follow continuously, dashboards, the energy dashboard | Lookups on demand, runtime parameters, changing data |
 
 ## Changelog
 
