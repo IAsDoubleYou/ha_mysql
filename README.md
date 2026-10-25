@@ -306,17 +306,7 @@ The imported sensors are those from the last start with an earlier release, so l
 
 ## HA MySQL or MySQL Query?
 
-Two integrations, two different jobs. They can be installed side by side.
-
-| | **HA MySQL** (this repository) | **[MySQL Query](https://github.com/IAsDoubleYou/homeassistant-mysql_query)** |
-|---|---|---|
-| Approach | Automatic sensors | Actions (services) for scripts and automations |
-| Runs a query | On its own interval, per sensor | Only when you call the action |
-| Result ends up in | The state and attributes of a sensor | The response of the action |
-| Creates entities | Yes, one sensor per query | No |
-| History and statistics | Yes, through the sensor | No |
-| Writing to the database | No, `SELECT` only | Yes, `INSERT`, `UPDATE`, `DELETE` and DDL as well |
-| Best for | Values you follow continuously, dashboards, the energy dashboard | Lookups on demand, runtime parameters, changing data |
+HA MySQL creates sensors that follow a query on an interval, SELECT only. MySQL Query runs a query only when you call the action, can write as well, and returns the result as response data. They can be installed side by side.
 
 ## Changelog
 
