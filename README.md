@@ -10,7 +10,7 @@
 
 > **Questions, ideas or want to show what you built?** Join the conversation in [GitHub Discussions](https://github.com/IAsDoubleYou/ha_mysql/discussions).
 
-> **Looking to run one-off queries or write to the database, instead of tracking a value continuously?** See [MySQL Query](https://github.com/IAsDoubleYou/homeassistant-mysql_query), a sibling integration built for that — full comparison at the [bottom of this README](#ha-mysql-or-mysql-query).
+> **Looking to run queries on demand, or to write to the database?** See [MySQL Query](https://github.com/IAsDoubleYou/homeassistant-mysql_query), a sibling integration built for that. [How they differ](#ha-mysql-or-mysql-query).
 
 A Home Assistant custom integration that turns the result of a MySQL or MariaDB query into a sensor. Every sensor runs its own query on its own interval, and the result is available as the **state**, as the columns of one selected row in **`valueof_*` attributes**, and as the whole result set in the **`json_result` attribute**. A query can be replaced at runtime with [`ha_mysql.set_query`](#ha_mysqlset_query).
 
@@ -306,7 +306,7 @@ The imported sensors are those from the last start with an earlier release, so l
 
 ## HA MySQL or MySQL Query?
 
-HA MySQL creates sensors that follow a query on an interval, SELECT only. MySQL Query runs a query only when you call the action, can write as well, and returns the result as response data. They can be installed side by side.
+HA MySQL turns a query into a sensor that follows the data on an interval: the state, the attributes and the history are all in Home Assistant, and it only reads. [MySQL Query](https://github.com/IAsDoubleYou/homeassistant-mysql_query) is the sibling for the other jobs: it runs a query only when an automation or script calls its action, can write to the database as well, and returns the result as response data. They can be installed side by side.
 
 ## Changelog
 
