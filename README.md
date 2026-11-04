@@ -1,6 +1,6 @@
 # HA MySQL Sensor for Home Assistant
 
-[![HACS Custom][hacs_shield]][hacs]
+[![HACS Default][hacs_shield]][hacs]
 [![GitHub Latest Release][releases_shield]][latest_release]
 [![GitHub Downloads (latest Release)][downloads_latest_shield]][latest_release]
 [![GitHub All Releases][downloads_total_shield]][releases]
@@ -53,10 +53,9 @@ GRANT SELECT ON mydatabase.* TO 'homeassistant'@'%';
 
 ## Installation
 
-### Using [HACS](https://hacs.xyz/)
+### Using [HACS](https://hacs.xyz/) (recommended)
 
-- Add `https://github.com/IAsDoubleYou/ha_mysql` as a [custom repository](https://hacs.xyz/docs/faq/custom_repositories/) of type Integration.
-- Download **HA MySQL** and restart Home Assistant.
+Open HACS, search for "HA MySQL", open **HA MySQL**, select **Download** and restart Home Assistant.
 
 ### Manual
 
@@ -316,7 +315,7 @@ See [CHANGELOG.md](CHANGELOG.md) for a full list of changes per version, includi
 
 If you enjoy using this integration, please consider giving it a ⭐ on [GitHub](https://github.com/IAsDoubleYou/ha_mysql)! It costs nothing, shows your appreciation, and helps other Home Assistant users find this integration more easily.
 
-[hacs_shield]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square
+[hacs_shield]: https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=flat-square
 [hacs]: https://github.com/hacs/integration
 [latest_release]: https://github.com/IAsDoubleYou/ha_mysql/releases/latest
 [releases_shield]: https://img.shields.io/github/v/release/IAsDoubleYou/ha_mysql?style=flat-square
