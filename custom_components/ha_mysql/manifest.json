@@ -1,6 +1,7 @@
 {
     "domain": "ha_mysql",
     "name": "HA MySQL Sensor",
+    "categories": ["diy_makers.web_data_connectors"],
     "codeowners": ["@IAsDoubleYou"],
     "config_flow": true,
     "documentation": "https://github.com/IAsDoubleYou/ha_mysql/",
